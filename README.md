@@ -19,7 +19,7 @@ Transcribe with locally running [ASR-API](https://github.com/translatorswb/ASR-A
 python autotemplater.py -i audio.wav -x -l en
 ```
 
-Transcribe with azure speeck SDK
+Transcribe with azure speech SDK
 ```
 python autotemplater.py -i audio.wav -l en-US -a <azure-subscription-key> -r <azure-region>
 ```
