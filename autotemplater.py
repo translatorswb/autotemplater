@@ -19,6 +19,7 @@ parser.add_argument('-l', '--lang', type=str, help='Language')
 parser.add_argument('-o', '--out', type=str, help='Output directory')
 parser.add_argument('-p', '--punctoken', type=str, help='PunkProse token if sending to remote API')
 parser.add_argument('-a', '--azuretoken', type=str, help='Azure token if sending to Azure ASR')
+parser.add_argument('-r', '--azureregion', type=str, help='Azure region if sending to Azure ASR')
 parser.add_argument('-x', '--useapi', action='store_true', help='Use ASR-API to transcribe')
 
 API_TRANSCRIBE_URL = "http://127.0.0.1:8010/transcribe/short"
@@ -193,6 +194,7 @@ def main():
     out_path = args.out
     lang = args.lang
     azure_token = args.azuretoken
+    azure_region = args.azureregion
     use_api = args.useapi
 
     if not audio_path:
@@ -255,7 +257,7 @@ def main():
         speech_config = initialize_api_config(lang)
     elif azure_token:
         asr_service = AZURE_ASR_FLAG
-        speech_config = initialize_azure_config(azure_token, lang)
+        speech_config = initialize_azure_config(azure_token, lang, azure_region)
     else:
         asr_service = None
 
