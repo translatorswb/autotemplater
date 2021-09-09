@@ -26,7 +26,8 @@ parser.add_argument('-o', '--out', type=str, help='Output directory')
 parser.add_argument('-p', '--punctoken', type=str, help='PunkProse token if sending to remote API (Not implemented)') #TODO
 parser.add_argument('-a', '--azuretoken', type=str, help='Azure token if sending to Azure ASR')
 parser.add_argument('-r', '--azureregion', type=str, help='Azure region if sending to Azure ASR', default=DEFAULT_AZURE_REGION)
-parser.add_argument('-x', '--useapi', action='store_true', help='Use ASR-API to transcribe')
+parser.add_argument('-x', '--useapi', action='store_true', help='Use ASR-API to transcribe (Prioritizes over Azure)')
+parser.add_argument('-u', '--apiurl', type=str, help='ASR-API URL endpoint', default=API_TRANSCRIBE_URL)
 parser.add_argument('-t', '--turn', type=str, help='Turn on speaker or segment', default='segment')
 parser.add_argument('-s', '--sid', action='store_true', help='Write speaker id on turns')
 
@@ -143,10 +144,11 @@ def timestamp_spanner(sec):
     span_str = '<span class="timestamp" data-timestamp="%s">%s</span>'%(sec, res)
     return span_str
 
-def initialize_api_config(lang, scorer='default'):
-    return {'lang': lang, 'scorer':scorer}
+def initialize_api_config(lang, api_url_endpoint, scorer='default'):
+    return {'lang': lang, 'scorer':scorer, 'url': api_url_endpoint}
 
 def transcribe_with_asr_api(audio_path, config):
+    url_endpoint = config['url']
     payload={'lang': config['lang']} #TODO: doesn't get the scorer in. 
     headers = {}
     
@@ -156,7 +158,7 @@ def transcribe_with_asr_api(audio_path, config):
     files=[('file',(audio_filename, open(audio_path,'rb'),'audio/wav'))]
     
     try:
-        response = requests.request("POST", API_TRANSCRIBE_URL, headers=headers, data=payload, files=files)
+        response = requests.request("POST", url_endpoint, headers=headers, data=payload, files=files)
     except Exception as e:
         print("ERROR: Cannot establish connection with ASR API")
         print(e)
@@ -203,6 +205,7 @@ def main():
     use_api = args.useapi
     turn_on = args.turn
     write_speaker_id = args.sid
+    asr_api_url_endpoint = args.apiurl
 
     if not audio_path:
         print("ERROR: Need input audio")
@@ -273,7 +276,7 @@ def main():
     #Initialize transcription
     if use_api:
         asr_service = ASR_API_FLAG
-        speech_config = initialize_api_config(lang)
+        speech_config = initialize_api_config(lang, asr_api_url_endpoint)
     elif azure_token:
         asr_service = AZURE_ASR_FLAG
         speech_config = initialize_azure_config(azure_token, lang, azure_region)
