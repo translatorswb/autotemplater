@@ -1,4 +1,4 @@
-# Creates automatically diarized and transcribed oTranscribe template using pyannote and ASR API or Azure 
+# Create automatically diarized and transcribed oTranscribe template using pyannote and ASR API or Azure 
 
 import argparse
 import sys
@@ -13,19 +13,22 @@ import shutil
 import requests
 from pydub import AudioSegment
 
-parser = argparse.ArgumentParser(description="oTranscribe template maker")
-parser.add_argument('-i', '--audio', type=str, required=True, help='Input audio path')
-parser.add_argument('-l', '--lang', type=str, help='Language')
-parser.add_argument('-o', '--out', type=str, help='Output directory')
-parser.add_argument('-p', '--punctoken', type=str, help='PunkProse token if sending to remote API')
-parser.add_argument('-a', '--azuretoken', type=str, help='Azure token if sending to Azure ASR')
-parser.add_argument('-r', '--azureregion', type=str, help='Azure region if sending to Azure ASR')
-parser.add_argument('-x', '--useapi', action='store_true', help='Use ASR-API to transcribe')
-
 API_TRANSCRIBE_URL = "http://127.0.0.1:8010/transcribe/short"
 ASR_API_FLAG = 'api'
 AZURE_ASR_FLAG = 'azure'
 DEFAULT_AZURE_REGION = 'westeurope'
+SPEAKER_DELIMITER = ':'
+
+parser = argparse.ArgumentParser(description="oTranscribe template maker")
+parser.add_argument('-i', '--audio', type=str, required=True, help='Input audio path')
+parser.add_argument('-l', '--lang', type=str, help='Language')
+parser.add_argument('-o', '--out', type=str, help='Output directory')
+parser.add_argument('-p', '--punctoken', type=str, help='PunkProse token if sending to remote API (Not implemented)') #TODO
+parser.add_argument('-a', '--azuretoken', type=str, help='Azure token if sending to Azure ASR')
+parser.add_argument('-r', '--azureregion', type=str, help='Azure region if sending to Azure ASR', default=DEFAULT_AZURE_REGION)
+parser.add_argument('-x', '--useapi', action='store_true', help='Use ASR-API to transcribe')
+parser.add_argument('-t', '--turn', type=str, help='Turn on speaker or segment', default='segment')
+parser.add_argument('-s', '--sid', action='store_true', help='Write speaker id on turns')
 
 def timestamp_spanner(sec):
     ty_res = time.gmtime(sec)
@@ -33,24 +36,23 @@ def timestamp_spanner(sec):
     span_str = '<span class="timestamp" data-timestamp="%s">%s</span>'%(sec, res)
     return span_str
 
-def get_speaker_turns(diarization_output):
+def get_speaker_turns(diarization_output, turn_on_speaker_change):
     speaker_turns = []
-    current_turn = None
-    current_speaker = ''
+    current_turn = {'speaker':None, 'start':None, 'end':None}
     for s in diarization_output:
-        speaker_change = not s['label'] == current_speaker
+        speaker_change = not s['label'] == current_turn['speaker']
 
-        if speaker_change:
+        if not turn_on_speaker_change or speaker_change:
             #close current turn (unless it's the first turn)
-            if current_turn:
-                print("insert", current_turn)
+            if current_turn['speaker']:
                 speaker_turns.append(current_turn)
 
+            #start new turn
             current_turn = {}
             current_turn['start'] = s['segment']['start']
             current_turn['end'] = s['segment']['end']
+            current_turn['speaker'] = s['label']
         else:
-            print("new end", current_turn['end'])
             current_turn['end'] = s['segment']['end']
 
     if current_turn:
@@ -59,11 +61,13 @@ def get_speaker_turns(diarization_output):
             
     return speaker_turns
 
-def speaker_turns_to_otr(speaker_turns, output_path):
+def speaker_turns_to_otr(speaker_turns, output_path, write_speaker_id=False):
     otr_text = ""
     for t in speaker_turns:
         otr_text += timestamp_spanner(t['start']) + ' '
         
+        if write_speaker_id and 'speaker' in t:
+            otr_text += '(' + t['speaker'] + ')' + SPEAKER_DELIMITER + " "
         if 'text' in t:
             otr_text += t['text']
         otr_text += '<br /><br />'
@@ -116,12 +120,9 @@ def audio_convert(audio_path):
         return audio_path
 
 
-def initialize_azure_config(subscription_id, lang_code, region=DEFAULT_AZURE_REGION):
+def initialize_azure_config(subscription_id, lang_code, region):
     global speechsdk
     import azure.cognitiveservices.speech as speechsdk
-
-    if not region:
-        region = DEFAULT_AZURE_REGION
 
     speech_config = speechsdk.SpeechConfig(subscription=subscription_id, region=region)
     speech_config.speech_recognition_language=lang_code
@@ -147,7 +148,6 @@ def initialize_api_config(lang, scorer='default'):
 
 def transcribe_with_asr_api(audio_path, config):
     payload={'lang': config['lang']} #TODO: doesn't get the scorer in. 
-    print(payload)
     headers = {}
     
     #Send to ASR API
@@ -189,7 +189,7 @@ def get_transcription_of_chunk(complete_audio, start_sec, end_sec, chunk_path, s
     elif service == AZURE_ASR_FLAG:
         transcript = transcribe_with_azure(audio_chunk_path, speech_config)
     
-    print("%.2f-%.2f: %s"%(start_sec, end_sec, transcript))
+    #print("%.2f-%.2f: %s"%(start_sec, end_sec, transcript))
     return transcript
 
 def main():
@@ -201,6 +201,8 @@ def main():
     azure_token = args.azuretoken
     azure_region = args.azureregion
     use_api = args.useapi
+    turn_on = args.turn
+    write_speaker_id = args.sid
 
     if not audio_path:
         print("ERROR: Need input audio")
@@ -221,14 +223,22 @@ def main():
         print("ERROR: Specify language with -l")
         sys.exit()
 
-    #TODO: Check file exists
+    #Check file exists
     if not os.path.exists(audio_path):
         print("ERROR: File not found", audio_path)
         sys.exit()
 
+    if turn_on == 'speaker':
+        turn_on_speaker_change = True
+    else:
+        turn_on_speaker_change = False
+    print('Turn on speaker change:', turn_on_speaker_change)
+
+    #Output files 
     out_json_path = os.path.join(out_path ,os.path.splitext(os.path.basename(audio_path))[0] + '-diarization.json')
     out_empty_otr_path = os.path.join(out_path ,os.path.splitext(os.path.basename(audio_path))[0] + '-diarization.otr')
     out_final_otr_path = os.path.join(out_path ,os.path.splitext(os.path.basename(audio_path))[0] + '-autotemplate.otr')
+    out_txt_path = os.path.join(out_path ,os.path.splitext(os.path.basename(audio_path))[0] + '-transcript.txt')
 
     #Ensure wav format input
     wav_path = audio_convert(audio_path)
@@ -250,15 +260,15 @@ def main():
             print("Dumping diarization output", out_json_path)
             f.write(json.dumps(diarization_dict))
 
-    print("diarization_dict")
-    print(diarization_dict)
+    # print("diarization_dict")
+    # print(diarization_dict)
 
     #Make empty OTR template
-    speaker_turns = get_speaker_turns(diarization_dict['content'])
+    speaker_turns = get_speaker_turns(diarization_dict['content'], turn_on_speaker_change)
     
     #Write empty template to disk
     print("Dumping diarized template", out_empty_otr_path)
-    speaker_turns_to_otr(speaker_turns, out_empty_otr_path)
+    speaker_turns_to_otr(speaker_turns, out_empty_otr_path, write_speaker_id)
 
     #Initialize transcription
     if use_api:
@@ -280,12 +290,11 @@ def main():
         #Transcribe speaker turns
         for t in speaker_turns:
             t['text'] = get_transcription_of_chunk(complete_audio, t['start'], t['end'], tmp_dir_path, asr_service, speech_config)
-
-        print('after transcribe', speaker_turns)
+            print("%.2f-%.2f (%s): %s"%(t['start'], t['end'], t['speaker'], t['text']))
 
         #Write transcribed template to disk
         print("Dumping transcribed template", out_final_otr_path)
-        speaker_turns_to_otr(speaker_turns, out_final_otr_path)
+        speaker_turns_to_otr(speaker_turns, out_final_otr_path, write_speaker_id)
 
         #Remove temp directory
         shutil.rmtree(tmp_dir_path)
