@@ -1,0 +1,4 @@
+pydub
+requests
+pyannote
+azure-cognitiveservices-speech
