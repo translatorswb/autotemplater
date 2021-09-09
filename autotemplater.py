@@ -25,6 +25,7 @@ parser.add_argument('-x', '--useapi', action='store_true', help='Use ASR-API to 
 API_TRANSCRIBE_URL = "http://127.0.0.1:8010/transcribe/short"
 ASR_API_FLAG = 'api'
 AZURE_ASR_FLAG = 'azure'
+DEFAULT_AZURE_REGION = 'westeurope'
 
 def timestamp_spanner(sec):
     ty_res = time.gmtime(sec)
@@ -115,9 +116,12 @@ def audio_convert(audio_path):
         return audio_path
 
 
-def initialize_azure_config(subscription_id, lang_code, region="westeurope"):
+def initialize_azure_config(subscription_id, lang_code, region=DEFAULT_AZURE_REGION):
     global speechsdk
     import azure.cognitiveservices.speech as speechsdk
+
+    if not region:
+        region = DEFAULT_AZURE_REGION
 
     speech_config = speechsdk.SpeechConfig(subscription=subscription_id, region=region)
     speech_config.speech_recognition_language=lang_code
