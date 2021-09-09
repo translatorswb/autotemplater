@@ -148,7 +148,6 @@ def transcribe_with_asr_api(audio_path, config):
     audio_filename = os.path.basename(audio_path)
     
     files=[('file',(audio_filename, open(audio_path,'rb'),'audio/wav'))]
-    print(files)
     
     try:
         response = requests.request("POST", API_TRANSCRIBE_URL, headers=headers, data=payload, files=files)
@@ -157,11 +156,13 @@ def transcribe_with_asr_api(audio_path, config):
         print(e)
         return ""
     
+    response_dict = response.json()
+
     if response.ok:
-        response_dict = response.json()
         transcript = response_dict["transcript"]
     else:
-        print("Cannot read response for file", audio_chunk_filename)
+        print("Cannot read response for file", audio_filename)
+        print(response_dict)
         transcript = ""
         
     return transcript
@@ -276,7 +277,7 @@ def main():
         speaker_turns_to_otr(speaker_turns, out_final_otr_path)
 
         #Remove temp directory
-        # shutil.rmtree(tmp_dir_path)
+        shutil.rmtree(tmp_dir_path)
 
 if __name__ == "__main__":
     main()
