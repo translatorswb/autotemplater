@@ -1,4 +1,4 @@
-# autotemplater
+# autoTemplater
 Create automatically diarized and transcribed oTranscribe templates
 
 ### Installation
@@ -66,3 +66,9 @@ You can also specify a different output directory by using `-o` flag
 ```
 python autotemplater.py -i audio.wav -o <output-directory-path>
 ```
+
+### Post-editing on oTranscribe
+
+Automatic speech recognition (ASR) makes errors. If you want to do post-editing on the output, go to [otranscribe.com](https://otranscribe.com/), load your audio file and then import your template file (`.otr`). You can then easily post-edit while listening to your audio. 
+
+![Template post-editing on oTranscribe](img/otranscribe_editing.png)

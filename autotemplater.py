@@ -31,9 +31,14 @@ parser.add_argument('-u', '--apiurl', type=str, help='ASR-API URL endpoint', def
 parser.add_argument('-t', '--turn', type=str, help='Turn on speaker or segment', default='segment')
 parser.add_argument('-s', '--sid', action='store_true', help='Write speaker id on turns')
 
-def timestamp_spanner(sec):
+def sec_to_timestamp(sec):
     ty_res = time.gmtime(sec)
     res = time.strftime("%H:%M:%S",ty_res)
+    return res
+
+def timestamp_spanner(sec):
+    ty_res = time.gmtime(sec)
+    res = sec_to_timestamp(sec)
     span_str = '<span class="timestamp" data-timestamp="%s">%s</span>'%(sec, res)
     return span_str
 
@@ -77,6 +82,20 @@ def speaker_turns_to_otr(speaker_turns, output_path, write_speaker_id=False):
     
     with open(output_path, 'w') as f:
         f.write(json.dumps(otr_format_dict))
+
+def speaker_turns_to_txt(speaker_turns, output_path, write_speaker_id=False):
+    out_text = ""
+    for t in speaker_turns:
+        out_text += sec_to_timestamp(t['start']) + ' '
+        
+        if write_speaker_id and 'speaker' in t:
+            out_text += '(' + t['speaker'] + ')' + SPEAKER_DELIMITER + " "
+        if 'text' in t:
+            out_text += t['text']
+        out_text += '\n'
+            
+    with open(output_path, 'w') as f:
+        f.write(out_text)
 
 def do_diarization(wav_path):
     from pyannote.core import Annotation, Segment
@@ -298,6 +317,9 @@ def main():
         #Write transcribed template to disk
         print("Dumping transcribed template", out_final_otr_path)
         speaker_turns_to_otr(speaker_turns, out_final_otr_path, write_speaker_id)
+
+        print("Dumping transcribed text", out_txt_path)
+        speaker_turns_to_txt(speaker_turns, out_txt_path, write_speaker_id)
 
         #Remove temp directory
         shutil.rmtree(tmp_dir_path)
