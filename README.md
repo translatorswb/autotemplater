@@ -4,6 +4,8 @@ Create automatically diarized and transcribed oTranscribe templates
 ### Installation
 
 ```
+git clone https://github.com/translatorswb/autotemplater.git
+cd autotemplater
 pip install -r requirements.txt
 ```
 
