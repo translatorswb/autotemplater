@@ -35,30 +35,29 @@ def timestamp_spanner(sec):
 
 def get_speaker_turns(diarization_output):
     speaker_turns = []
-    current_turn = {}
+    current_turn = None
     current_speaker = ''
     for s in diarization_output:
         speaker_change = not s['label'] == current_speaker
 
         if speaker_change:
-            #close current turn
+            #close current turn (unless it's the first turn)
             if current_turn:
+                print("insert", current_turn)
                 speaker_turns.append(current_turn)
 
-            #open new turn
+            current_turn = {}
             current_turn['start'] = s['segment']['start']
+            current_turn['end'] = s['segment']['end']
         else:
+            print("new end", current_turn['end'])
             current_turn['end'] = s['segment']['end']
 
-        if current_turn:
-            current_turn['end'] = s['segment']['end']
-            speaker_turns.append(current_turn)
+    if current_turn:
+        current_turn['end'] = s['segment']['end']
+        speaker_turns.append(current_turn)
             
     return speaker_turns
-
-# def transcribe_speaker_turns(speaker_turns, complete_audio, tmp_dir_path, service, azure_speech_config=None):
-#     for t in speaker_turns:
-#         t['text'] = get_transcription_of_chunk(complete_audio, t['start'], t['end'], tmp_dir_path, azure_speech_config)
 
 def speaker_turns_to_otr(speaker_turns, output_path):
     otr_text = ""
@@ -85,6 +84,7 @@ def do_diarization(wav_path):
 
     return diarization_dict
 
+#Converts audio to mono wav (unless it's already or there's a converted version in the same directory)
 def audio_convert(audio_path):
     do_convert = False
     if os.path.splitext(audio_path)[1][1:] == 'wav':
@@ -135,6 +135,7 @@ def transcribe_with_azure(audio_path, speech_config):
     result = speech_recognizer.recognize_once_async().get()
     return result.text
 
+#Converts seconds to otranscribe timestamp
 def timestamp_spanner(sec):
     ty_res = time.gmtime(sec)
     res = time.strftime("%H:%M:%S",ty_res)
@@ -145,7 +146,7 @@ def initialize_api_config(lang, scorer='default'):
     return {'lang': lang, 'scorer':scorer}
 
 def transcribe_with_asr_api(audio_path, config):
-    payload={'lang': config['lang']}
+    payload={'lang': config['lang']} #TODO: doesn't get the scorer in. 
     print(payload)
     headers = {}
     
@@ -220,6 +221,10 @@ def main():
         print("ERROR: Specify language with -l")
         sys.exit()
 
+    #TODO: Check file exists
+    if not os.path.exists(audio_path):
+        print("ERROR: File not found", audio_path)
+        sys.exit()
 
     out_json_path = os.path.join(out_path ,os.path.splitext(os.path.basename(audio_path))[0] + '-diarization.json')
     out_empty_otr_path = os.path.join(out_path ,os.path.splitext(os.path.basename(audio_path))[0] + '-diarization.otr')
