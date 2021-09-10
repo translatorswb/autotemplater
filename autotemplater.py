@@ -17,6 +17,7 @@ API_TRANSCRIBE_URL = "http://127.0.0.1:8010/transcribe/short"
 ASR_API_FLAG = 'api'
 AZURE_ASR_FLAG = 'azure'
 DEFAULT_AZURE_REGION = 'westeurope'
+SUPPORTED_ASR_SERVICE_TAGS = [ASR_API_FLAG, AZURE_ASR_FLAG]
 SPEAKER_DELIMITER = ':'
 
 parser = argparse.ArgumentParser(description="oTranscribe template maker")
@@ -25,11 +26,11 @@ parser.add_argument('-l', '--lang', type=str, help='Language')
 parser.add_argument('-o', '--out', type=str, help='Output directory')
 parser.add_argument('-p', '--punctoken', type=str, help='PunkProse token if sending to remote API (Not implemented)') #TODO
 parser.add_argument('-a', '--azuretoken', type=str, help='Azure token if sending to Azure ASR')
-parser.add_argument('-r', '--azureregion', type=str, help='Azure region if sending to Azure ASR', default=DEFAULT_AZURE_REGION)
-parser.add_argument('-x', '--useapi', action='store_true', help='Use ASR-API to transcribe (Prioritizes over Azure)')
-parser.add_argument('-u', '--apiurl', type=str, help='ASR-API URL endpoint', default=API_TRANSCRIBE_URL)
-parser.add_argument('-t', '--turn', type=str, help='Turn on speaker or segment', default='segment')
-parser.add_argument('-s', '--sid', action='store_true', help='Write speaker id on turns')
+parser.add_argument('-r', '--azureregion', type=str, help='Azure region if sending to Azure ASR (default: westeurope)', default=DEFAULT_AZURE_REGION)
+parser.add_argument('-x', '--transcribe', type=str, help='Automatic transcription service %s'%(SUPPORTED_ASR_SERVICE_TAGS))
+parser.add_argument('-u', '--apiurl', type=str, help='ASR-API URL endpoint (e.g. http://127.0.0.1:8010/transcribe/short)', default=API_TRANSCRIBE_URL)
+parser.add_argument('-t', '--turn', type=str, help='Turn on speaker or speech segment (default: segment)', default='segment')
+parser.add_argument('-s', '--sid', action='store_true', help='Write speaker id on turns (default: False)')
 
 def sec_to_timestamp(sec):
     ty_res = time.gmtime(sec)
@@ -221,13 +222,13 @@ def main():
     lang = args.lang
     azure_token = args.azuretoken
     azure_region = args.azureregion
-    use_api = args.useapi
+    asr_service = args.transcribe
     turn_on = args.turn
     write_speaker_id = args.sid
     asr_api_url_endpoint = args.apiurl
 
     if not audio_path:
-        print("ERROR: Need input audio")
+        print("ERROR: Specify input audio path (-i)")
         sys.exit()
 
     if not out_path:
@@ -241,8 +242,16 @@ def main():
         else:
             os.mkdir(out_path)
 
-    if (use_api or azure_token) and not lang:
-        print("ERROR: Specify language with -l")
+    if not asr_service in SUPPORTED_ASR_SERVICE_TAGS:
+        print("ERROR: ASR service %s not supported. Select from %s"%(asr_service, SUPPORTED_ASR_SERVICE_TAGS))
+        sys.exit()
+
+    if asr_service and not lang:
+        print("ERROR: Specify audio language with -l")
+        sys.exit()
+
+    if asr_service==AZURE_ASR_FLAG and not azure_token:
+        print("ERROR: Specify service token to use Azure transcription (-a)")
         sys.exit()
 
     #Check file exists
@@ -293,17 +302,16 @@ def main():
     speaker_turns_to_otr(speaker_turns, out_empty_otr_path, write_speaker_id)
 
     #Initialize transcription
-    if use_api:
+    if asr_service == ASR_API_FLAG:
         asr_service = ASR_API_FLAG
         speech_config = initialize_api_config(lang, asr_api_url_endpoint)
-    elif azure_token:
-        asr_service = AZURE_ASR_FLAG
+    elif asr_service == AZURE_ASR_FLAG:
         speech_config = initialize_azure_config(azure_token, lang, azure_region)
     else:
         asr_service = None
 
     if asr_service:
-        #Process audio?
+        #Read audio to memory
         complete_audio = AudioSegment.from_wav(wav_path)
 
         #Create temp directory to store audio chunks

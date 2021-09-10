@@ -18,17 +18,17 @@ python autotemplater.py -i audio.wav
 
 Transcribe with locally running [ASR-API](https://github.com/translatorswb/ASR-API)
 ```
-python autotemplater.py -i audio.wav -x -l en
+python autotemplater.py -i audio.wav -x api -l en
 ```
 
 Transcribe with remotely running [ASR-API](https://github.com/translatorswb/ASR-API)
 ```
-python autotemplater.py -i audio.wav -x -l en -u <remote-asr-api-endpoint>
+python autotemplater.py -i audio.wav -x api -l en -u <remote-asr-api-endpoint>
 ```
 
 Transcribe with Azure speech SDK
 ```
-python autotemplater.py -i audio.wav -l en-US -a <azure-subscription-key> -r <azure-region>
+python autotemplater.py -i audio.wav -x azure -l en-US -a <azure-subscription-key> -r <azure-region>
 ```
 
 ### Template options
