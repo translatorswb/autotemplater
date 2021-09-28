@@ -242,7 +242,7 @@ def main():
         else:
             os.mkdir(out_path)
 
-    if not asr_service in SUPPORTED_ASR_SERVICE_TAGS:
+    if asr_service and not asr_service in SUPPORTED_ASR_SERVICE_TAGS:
         print("ERROR: ASR service %s not supported. Select from %s"%(asr_service, SUPPORTED_ASR_SERVICE_TAGS))
         sys.exit()
 
