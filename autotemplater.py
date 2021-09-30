@@ -13,7 +13,7 @@ import shutil
 import requests
 from pydub import AudioSegment
 
-API_TRANSCRIBE_URL = "http://127.0.0.1:8010/transcribe/short"
+API_TRANSCRIBE_URL = "http://127.0.0.1:8010/transcribe/short"  #default running on local
 ASR_API_FLAG = 'api'
 AZURE_ASR_FLAG = 'azure'
 DEFAULT_AZURE_REGION = 'westeurope'
@@ -124,7 +124,7 @@ def audio_convert(audio_path):
         except:
             do_convert = True
     else:
-        wav_path = os.path.splitext(os.path.basename(audio_path))[0] + '.wav'
+        wav_path = os.path.join(os.path.dirname(audio_path), os.path.splitext(os.path.basename(audio_path))[0] + '.wav')
         if os.path.exists(wav_path):
             return audio_convert(wav_path)
         else:
@@ -134,10 +134,12 @@ def audio_convert(audio_path):
         process = subprocess.call(['ffmpeg', '-loglevel', 'quiet', '-i',
                                         audio_path, '-ac', '1', wav_path])
 
-        print("Audio converted to wav: ", wav_path)
+        print("Converting audio to wav", wav_path)
 
         return wav_path
     else:
+        print("Reading wav", audio_path)
+
         return audio_path
 
 
@@ -303,11 +305,13 @@ def main():
 
     #Initialize transcription
     if asr_service == ASR_API_FLAG:
-        asr_service = ASR_API_FLAG
+        print("Initializing ASR with API on %s"%asr_api_url_endpoint)
         speech_config = initialize_api_config(lang, asr_api_url_endpoint)
     elif asr_service == AZURE_ASR_FLAG:
+        print("Initializing ASR with Azure")
         speech_config = initialize_azure_config(azure_token, lang, azure_region)
     else:
+        print("Skipping ASR")
         asr_service = None
 
     if asr_service:
