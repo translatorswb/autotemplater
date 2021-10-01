@@ -10,6 +10,7 @@ import json
 import subprocess
 import tempfile
 import shutil
+import random
 import requests
 from pydub import AudioSegment
 
@@ -19,6 +20,7 @@ AZURE_ASR_FLAG = 'azure'
 DEFAULT_AZURE_REGION = 'westeurope'
 SUPPORTED_ASR_SERVICE_TAGS = [ASR_API_FLAG, AZURE_ASR_FLAG]
 SPEAKER_DELIMITER = ':'
+SAMPLE_COUNT = 5
 
 parser = argparse.ArgumentParser(description="oTranscribe template maker")
 parser.add_argument('-i', '--audio', type=str, required=True, help='Input audio path')
@@ -216,7 +218,22 @@ def get_transcription_of_chunk(complete_audio, start_sec, end_sec, chunk_path, s
     #print("%.2f-%.2f: %s"%(start_sec, end_sec, transcript))
     return transcript
 
+def dump_chunk(audio, start_sec, end_sec, chunk_path):
+    start_ms = start_sec * 1000
+    end_ms = end_sec * 1000
+
+    audio_segment = audio[int(start_ms):int(end_ms)]
+    
+    audio_chunk_filename = "%.2f"%start_sec + "-" + "%.2f"%end_sec + ".wav"
+    audio_chunk_path = os.path.join(chunk_path, audio_chunk_filename)
+    
+    audio_segment.export(audio_chunk_path, format="wav")
+    
+    return audio_chunk_path
+
 def main():
+
+    #Parse args
     args = parser.parse_args()
 
     audio_path = args.audio
@@ -229,6 +246,7 @@ def main():
     write_speaker_id = args.sid
     asr_api_url_endpoint = args.apiurl
 
+    #Input checks
     if not audio_path:
         print("ERROR: Specify input audio path (-i)")
         sys.exit()
@@ -256,7 +274,7 @@ def main():
         print("ERROR: Specify service token to use Azure transcription (-a)")
         sys.exit()
 
-    #Check file exists
+    #Check audio file exists
     if not os.path.exists(audio_path):
         print("ERROR: File not found", audio_path)
         sys.exit()
@@ -268,18 +286,33 @@ def main():
     print('Turn on speaker change:', turn_on_speaker_change)
 
     #Output files 
-    out_json_path = os.path.join(out_path ,os.path.splitext(os.path.basename(audio_path))[0] + '-diarization.json')
-    out_empty_otr_path = os.path.join(out_path ,os.path.splitext(os.path.basename(audio_path))[0] + '-diarization.otr')
-    out_final_otr_path = os.path.join(out_path ,os.path.splitext(os.path.basename(audio_path))[0] + '-autotemplate.otr')
-    out_txt_path = os.path.join(out_path ,os.path.splitext(os.path.basename(audio_path))[0] + '-transcript.txt')
+    audio_id = os.path.splitext(os.path.basename(audio_path))[0]
+    out_json_path = os.path.join(out_path ,audio_id + '-rawdiarization.json')
+    out_empty_otr_path = os.path.join(out_path ,audio_id + '-diarization.otr')
+    out_final_otr_path = os.path.join(out_path ,audio_id + '-autotemplate.otr')
+    out_txt_path = os.path.join(out_path ,audio_id + '-transcript.txt')
+    out_mapped_json_path = os.path.join(out_path ,audio_id + '-reviseddiarization.json')
+    out_mapping_path = os.path.join(out_path ,audio_id + '-spkrevisionmap.txt')
 
     #Ensure wav format input
     wav_path = audio_convert(audio_path)
 
+    #Read audio to memory
+    complete_audio = AudioSegment.from_wav(wav_path)
+
     #Perform (or read) diarization
-    if os.path.exists(out_json_path):
+    skip_revision_query = False
+    if os.path.exists(out_mapped_json_path):
         #Load diarization dictionary
-        print("Reading diarization output", out_json_path)
+        print("Reading revised diarization output", out_mapped_json_path)
+        with open(out_mapped_json_path, 'r') as f:
+            diarization_dict_data = f.read()
+            
+        diarization_dict = json.loads(diarization_dict_data)
+        skip_revision_query = True
+    elif os.path.exists(out_json_path):
+        #Load diarization dictionary
+        print("Reading raw diarization output", out_json_path)
         with open(out_json_path, 'r') as f:
             diarization_dict_data = f.read()
             
@@ -290,14 +323,118 @@ def main():
 
         #Write intermediate JSON to file
         with open(out_json_path, 'w') as f:
-            print("Dumping diarization output", out_json_path)
+            print("Dumping raw diarization output", out_json_path)
             f.write(json.dumps(diarization_dict))
 
     # print("diarization_dict")
     # print(diarization_dict)
 
+    do_revision = False
+    if not skip_revision_query:
+        #Perform speaker label revision (optional)
+        perform_revision_input = input("Do you want to revise speaker labels? (y for yes) ")
+        speaker_label_map_dict = {}
+        print(perform_revision_input)
+        
+        if perform_revision_input == 'y' or perform_revision_input == 'Y':
+            
+            if os.path.exists(out_mapping_path):
+                print("Found a mapping file with following info")
+                with open(out_mapping_path, 'r') as f:
+                    mapping_dict = f.read()
+                
+                speaker_label_map_dict = json.loads(mapping_dict)
+                print(mapping_dict)
+                use_savedmapping_input = input("Do you want to use it? (y for yes) ")
+                if not use_savedmapping_input == 'y' and not use_savedmapping_input == 'Y':
+                    do_revision = True
+            else:
+                do_revision = True
+
+    if do_revision:
+        #Do revision
+        speaker_segments = {}
+        for i, segment_info in enumerate(diarization_dict['content']):
+            if segment_info['label'] not in speaker_segments:
+                speaker_segments[segment_info['label']] = [i]
+            else:
+                speaker_segments[segment_info['label']].append(i)
+
+        #Open directory for revision
+        revision_path = "revision"
+        if not os.path.exists(revision_path):
+            os.makedirs(revision_path)
+            
+        project_revision_path = os.path.join(revision_path, audio_id)
+
+        if not os.path.exists(project_revision_path):
+            os.makedirs(project_revision_path)
+
+        print("Revise speaker samples from path " + project_revision_path)
+
+        for spk in speaker_segments:
+            print(spk)
+            spk_utt_ids = speaker_segments[spk]
+            pick_no = SAMPLE_COUNT if SAMPLE_COUNT < len(spk_utt_ids) else len(spk_utt_ids)
+            
+            pick = random.sample(spk_utt_ids, pick_no)
+            
+            #Open directory for spk under revision
+            spk_revision_path = os.path.join(project_revision_path, spk)
+            if not os.path.exists(spk_revision_path):
+                os.makedirs(spk_revision_path)
+            
+            #Cut and place utterances under directory
+            for utt_id in pick:
+                utt_path = dump_chunk(complete_audio, 
+                                      float(diarization_dict['content'][utt_id]['segment']['start']), 
+                                      float(diarization_dict['content'][utt_id]['segment']['end']), 
+                                      spk_revision_path)
+                print(utt_path)
+                
+            print()
+
+
+        print("Please specify names for each label")
+        for spk in speaker_segments:
+            mapto = input(spk + " is... ")
+            speaker_label_map_dict[spk] = mapto
+            
+        with open(out_mapping_path, 'w') as f:
+            print("Dumping mapping data", out_mapping_path)
+            f.write(json.dumps(speaker_label_map_dict))
+
+
+        print("Revised speaker labels")
+
+        reversed_speaker_label_map_dict = {}
+        for org_label in speaker_label_map_dict:
+            new_label = speaker_label_map_dict[org_label]
+            if new_label in reversed_speaker_label_map_dict:
+                print(new_label)
+                print(org_label)
+                print(reversed_speaker_label_map_dict[new_label])
+                reversed_speaker_label_map_dict[new_label].append(org_label)
+            else:
+                reversed_speaker_label_map_dict[new_label] = [org_label]
+            
+        print(reversed_speaker_label_map_dict)
+
+        #Update diarization dict with new label set
+        mapped_diarization_dict = diarization_dict.copy()
+        for segment in mapped_diarization_dict['content']:
+            old_label = segment['label']
+            segment['label'] = speaker_label_map_dict[old_label]
+
+        #Write intermediate JSON to file
+        with open(out_mapped_json_path, 'w') as f:
+            print("Dumping mapped diarization output", out_mapped_json_path)
+            f.write(json.dumps(mapped_diarization_dict))
+    else:
+        mapped_diarization_dict = diarization_dict
+
     #Make empty OTR template
-    speaker_turns = get_speaker_turns(diarization_dict['content'], turn_on_speaker_change)
+    speaker_turns = get_speaker_turns(mapped_diarization_dict['content'], turn_on_speaker_change)
     
     #Write empty template to disk
     print("Dumping diarized template", out_empty_otr_path)
@@ -315,9 +452,6 @@ def main():
         asr_service = None
 
     if asr_service:
-        #Read audio to memory
-        complete_audio = AudioSegment.from_wav(wav_path)
-
         #Create temp directory to store audio chunks
         tmp_dir_path = tempfile.mkdtemp()
         
