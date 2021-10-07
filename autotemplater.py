@@ -13,6 +13,7 @@ import shutil
 import random
 import requests
 from pydub import AudioSegment
+from tqdm import tqdm
 
 API_TRANSCRIBE_URL = "http://127.0.0.1:8010/transcribe/short"  #default running on local
 ASR_API_FLAG = 'api'
@@ -21,6 +22,7 @@ DEFAULT_AZURE_REGION = 'westeurope'
 SUPPORTED_ASR_SERVICE_TAGS = [ASR_API_FLAG, AZURE_ASR_FLAG]
 SPEAKER_DELIMITER = ':'
 SAMPLE_COUNT = 5
+MAX_SEGMENT_LENGTH = 30.0
 
 parser = argparse.ArgumentParser(description="oTranscribe template maker")
 parser.add_argument('-i', '--audio', type=str, required=True, help='Input audio path')
@@ -33,6 +35,8 @@ parser.add_argument('-x', '--transcribe', type=str, help='Automatic transcriptio
 parser.add_argument('-u', '--apiurl', type=str, help='ASR-API URL endpoint (e.g. http://127.0.0.1:8010/transcribe/short)', default=API_TRANSCRIBE_URL)
 parser.add_argument('-t', '--turn', type=str, help='Turn on speaker or speech segment (default: segment)', default='segment')
 parser.add_argument('-s', '--sid', action='store_true', help='Write speaker id on turns (default: False)')
+parser.add_argument('-v', '--skiprevision', action='store_true', help='Skip revision query')
+
 
 def sec_to_timestamp(sec):
     ty_res = time.gmtime(sec)
@@ -45,13 +49,14 @@ def timestamp_spanner(sec):
     span_str = '<span class="timestamp" data-timestamp="%s">%s</span>'%(sec, res)
     return span_str
 
-def get_speaker_turns(diarization_output, turn_on_speaker_change):
+def get_speaker_turns(diarization_output, turn_on_speaker_change, max_segment_length = MAX_SEGMENT_LENGTH):
     speaker_turns = []
-    current_turn = {'speaker':None, 'start':None, 'end':None}
+    current_turn = {'speaker':None, 'start':0.0, 'end':0.0}
     for s in diarization_output:
         speaker_change = not s['label'] == current_turn['speaker']
+        current_turn_length = current_turn['end'] - current_turn['start']
 
-        if not turn_on_speaker_change or speaker_change:
+        if not turn_on_speaker_change or speaker_change or current_turn_length > max_segment_length:
             #close current turn (unless it's the first turn)
             if current_turn['speaker']:
                 speaker_turns.append(current_turn)
@@ -145,7 +150,7 @@ def audio_convert(audio_path):
         return audio_path
 
 
-def initialize_azure_config(subscription_id, lang_code, region):
+def initialize_azure_config_old(subscription_id, lang_code, region):
     global speechsdk
     import azure.cognitiveservices.speech as speechsdk
 
@@ -154,12 +159,41 @@ def initialize_azure_config(subscription_id, lang_code, region):
 
     return speech_config
 
-def transcribe_with_azure(audio_path, speech_config):
+def initialize_azure_config(subscription_id, lang_code, region):
+    url = "https://" + region + ".stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=" + lang_code + "&format=detailed"
+    fetch_token_url = 'https://westeurope.api.cognitive.microsoft.com/sts/v1.0/issueToken'
+    headers = {
+        'Ocp-Apim-Subscription-Key': subscription_id
+    }
+    response = requests.post(fetch_token_url, headers=headers)
+
+    token  = str(response.text)
+    headers = {
+          'Authorization': f'Bearer {token}',
+          'Content-Type': 'audio/wave',
+          'Accept': 'application/json'
+        }
+    return {'token':token, 'url':url, 'headers':headers}
+
+def transcribe_with_azure_old(audio_path, speech_config):
     audio_input = speechsdk.AudioConfig(filename=audio_path)
     speech_recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_input)
 
     result = speech_recognizer.recognize_once_async().get()
     return result.text
+
+def transcribe_with_azure(audio_path, speech_config):
+    transcript = ''
+    with open(audio_path,"rb") as payload:
+        response = requests.request("POST", speech_config['url'], headers=speech_config['headers'], data=payload)
+
+        if response.status_code == 200:
+            response_json = response.json()
+            transcript = response_json['NBest'][0]['Display']
+        else:
+            print("Error processing", audio_path)
+
+    return transcript
 
 #Converts seconds to otranscribe timestamp
 def timestamp_spanner(sec):
@@ -245,6 +279,7 @@ def main():
     turn_on = args.turn
     write_speaker_id = args.sid
     asr_api_url_endpoint = args.apiurl
+    skip_revision_query = args.skiprevision
 
     #Input checks
     if not audio_path:
@@ -394,7 +429,6 @@ def main():
                 
             print()
 
-
         print("Please specify names for each label")
         for spk in speaker_segments:
             mapto = input(spk + " is... ")
@@ -403,7 +437,6 @@ def main():
         with open(out_mapping_path, 'w') as f:
             print("Dumping mapping data", out_mapping_path)
             f.write(json.dumps(speaker_label_map_dict))
-
 
         print("Revised speaker labels")
 
@@ -435,6 +468,8 @@ def main():
 
     #Make empty OTR template
     speaker_turns = get_speaker_turns(mapped_diarization_dict['content'], turn_on_speaker_change)
+
+    #print(speaker_turns) #DEBUG
     
     #Write empty template to disk
     print("Dumping diarized template", out_empty_otr_path)
@@ -454,11 +489,12 @@ def main():
     if asr_service:
         #Create temp directory to store audio chunks
         tmp_dir_path = tempfile.mkdtemp()
+        # print(tmp_dir_path) #DEBUG
         
         #Transcribe speaker turns
-        for t in speaker_turns:
+        for t in tqdm(speaker_turns, desc="Transcribing segments..."):
             t['text'] = get_transcription_of_chunk(complete_audio, t['start'], t['end'], tmp_dir_path, asr_service, speech_config)
-            print("%.2f-%.2f (%s): %s"%(t['start'], t['end'], t['speaker'], t['text']))
+            # print("%.2f-%.2f (%s): %s"%(t['start'], t['end'], t['speaker'], t['text']))
 
         #Write transcribed template to disk
         print("Dumping transcribed template", out_final_otr_path)
@@ -468,7 +504,7 @@ def main():
         speaker_turns_to_txt(speaker_turns, out_txt_path, write_speaker_id)
 
         #Remove temp directory
-        shutil.rmtree(tmp_dir_path)
+        shutil.rmtree(tmp_dir_path) #DEBUG
 
 if __name__ == "__main__":
     main()
