@@ -23,6 +23,7 @@ SUPPORTED_ASR_SERVICE_TAGS = [ASR_API_FLAG, AZURE_ASR_FLAG]
 SPEAKER_DELIMITER = ':'
 SAMPLE_COUNT = 5
 MAX_SEGMENT_LENGTH = 30.0
+SEGMENT_AT_PAUSE_LENGTH = 5.0
 
 parser = argparse.ArgumentParser(description="oTranscribe template maker")
 parser.add_argument('-i', '--audio', type=str, required=True, help='Input audio path')
@@ -49,14 +50,15 @@ def timestamp_spanner(sec):
     span_str = '<span class="timestamp" data-timestamp="%s">%s</span>'%(sec, res)
     return span_str
 
-def get_speaker_turns(diarization_output, turn_on_speaker_change, max_segment_length = MAX_SEGMENT_LENGTH):
+def get_speaker_turns(diarization_output, turn_on_speaker_change, max_segment_length = MAX_SEGMENT_LENGTH, segment_at_pause_length = SEGMENT_AT_PAUSE_LENGTH):
     speaker_turns = []
     current_turn = {'speaker':None, 'start':0.0, 'end':0.0}
     for s in diarization_output:
         speaker_change = not s['label'] == current_turn['speaker']
         current_turn_length = current_turn['end'] - current_turn['start']
+        pause_from_last_segment = s['segment']['start'] - current_turn['end']
 
-        if not turn_on_speaker_change or speaker_change or current_turn_length > max_segment_length:
+        if not turn_on_speaker_change or speaker_change or current_turn_length > max_segment_length or pause_from_last_segment >= segment_at_pause_length:
             #close current turn (unless it's the first turn)
             if current_turn['speaker']:
                 speaker_turns.append(current_turn)
