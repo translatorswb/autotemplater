@@ -336,7 +336,6 @@ def main():
     complete_audio = AudioSegment.from_wav(wav_path)
 
     #Perform (or read) diarization
-    skip_revision_query = False
     if os.path.exists(out_mapped_json_path):
         #Load diarization dictionary
         print("Reading revised diarization output", out_mapped_json_path)
