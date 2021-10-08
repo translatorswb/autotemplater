@@ -27,30 +27,33 @@ SEGMENT_AT_PAUSE_LENGTH = 5.0
 
 parser = argparse.ArgumentParser(description="oTranscribe template maker")
 parser.add_argument('-i', '--audio', type=str, required=True, help='Input audio path')
-parser.add_argument('-l', '--lang', type=str, help='Language')
-parser.add_argument('-o', '--out', type=str, help='Output directory')
+parser.add_argument('-l', '--lang', type=str, help='Transcription language')
+parser.add_argument('-o', '--out', type=str, help='Output directory (default: input audio directory)')
 parser.add_argument('-p', '--punctoken', type=str, help='PunkProse token if sending to remote API (Not implemented)') #TODO
 parser.add_argument('-a', '--azuretoken', type=str, help='Azure token if sending to Azure ASR')
-parser.add_argument('-r', '--azureregion', type=str, help='Azure region if sending to Azure ASR (default: westeurope)', default=DEFAULT_AZURE_REGION)
+parser.add_argument('-r', '--azureregion', type=str, help='Azure region if sending to Azure ASR (default: %s)'%DEFAULT_AZURE_REGION, default=DEFAULT_AZURE_REGION)
 parser.add_argument('-x', '--transcribe', type=str, help='Automatic transcription service %s'%(SUPPORTED_ASR_SERVICE_TAGS))
-parser.add_argument('-u', '--apiurl', type=str, help='ASR-API URL endpoint (e.g. http://127.0.0.1:8010/transcribe/short)', default=API_TRANSCRIBE_URL)
+parser.add_argument('-u', '--apiurl', type=str, help='ASR-API URL endpoint (default: http://127.0.0.1:8010/transcribe/short)', default=API_TRANSCRIBE_URL)
 parser.add_argument('-t', '--turn', type=str, help='Turn on speaker or speech segment (default: segment)', default='segment')
 parser.add_argument('-s', '--sid', action='store_true', help='Write speaker id on turns (default: False)')
-parser.add_argument('-v', '--skiprevision', action='store_true', help='Skip revision query')
+parser.add_argument('-v', '--skiprevision', action='store_true', help='Skip revision query (default: False)')
 
-
-def sec_to_timestamp(sec):
+def sec_to_timestamp(sec) -> str:
+    """Convert seconds to timestamp format"""
     ty_res = time.gmtime(sec)
     res = time.strftime("%H:%M:%S",ty_res)
     return res
 
-def timestamp_spanner(sec):
+def timestamp_spanner(sec) -> str:
+    """Creates an XML line for timestamp from seconds in audio"""
     ty_res = time.gmtime(sec)
     res = sec_to_timestamp(sec)
     span_str = '<span class="timestamp" data-timestamp="%s">%s</span>'%(sec, res)
     return span_str
 
 def get_speaker_turns(diarization_output, turn_on_speaker_change, max_segment_length = MAX_SEGMENT_LENGTH, segment_at_pause_length = SEGMENT_AT_PAUSE_LENGTH):
+    """Makes a minimal speaker turn list from diarization output. Merges segments that belong to same speaker"""
+
     speaker_turns = []
     current_turn = {'speaker':None, 'start':0.0, 'end':0.0}
     for s in diarization_output:
@@ -78,17 +81,20 @@ def get_speaker_turns(diarization_output, turn_on_speaker_change, max_segment_le
     return speaker_turns
 
 def speaker_turns_to_otr(speaker_turns, output_path, write_speaker_id=False):
+    """Creates an OTR template from speaker turn list"""
+
     otr_text = ""
     for t in speaker_turns:
-        if not 'text' in t:
-            continue 
+        if 'text' in t:
+            if not t['text']:
+                continue 
 
         otr_text += timestamp_spanner(t['start']) + ' '
         
         if write_speaker_id: #and 'speaker' in t:
             otr_text += '(' + t['speaker'] + ')' + SPEAKER_DELIMITER + " "
-        #if 'text' in t:
-        otr_text += t['text']
+        if 'text' in t:
+            otr_text += t['text']
         otr_text += '<br /><br />'
         
     otr_format_dict = {'text': otr_text, "media": "", "media-time":"0.0"}
@@ -97,23 +103,28 @@ def speaker_turns_to_otr(speaker_turns, output_path, write_speaker_id=False):
         f.write(json.dumps(otr_format_dict))
 
 def speaker_turns_to_txt(speaker_turns, output_path, write_speaker_id=False):
+    """Creates an TXT file from speaker turn list"""
+
     out_text = ""
     for t in speaker_turns:
-        if not 'text' in t:
-            continue 
+        if 'text' in t:
+            if not t['text']:
+                continue 
             
         out_text += sec_to_timestamp(t['start']) + ' '
         
         if write_speaker_id:# and 'speaker' in t:
             out_text += '(' + t['speaker'] + ')' + SPEAKER_DELIMITER + " "
-        #if 'text' in t:
-        out_text += t['text']
+        if 'text' in t:
+            out_text += t['text']
         out_text += '\n'
             
     with open(output_path, 'w') as f:
         f.write(out_text)
 
 def print_speakers_data(diarization_dict):
+    """Prints number of speakers and number of segments for each of them on the screen"""
+
     speakers_info = {}
     for s in diarization_dict['content']:
         if s['label'] not in speakers_info:
@@ -125,6 +136,8 @@ def print_speakers_data(diarization_dict):
         print("%s: %i segments"%(s, speakers_info[s]))
 
 def do_diarization(wav_path):
+    """Performs pyannote diarization on wav file and outputs its results"""
+
     from pyannote.core import Annotation, Segment
     from pyannote.audio.features import RawAudio
 
@@ -135,8 +148,9 @@ def do_diarization(wav_path):
 
     return diarization_dict
 
-#Converts audio to mono wav (unless it's already or there's a converted version in the same directory)
 def audio_convert(audio_path):
+    """Converts audio to mono wav (unless it's already or there's a converted version in the same directory)"""
+
     do_convert = False
     if os.path.splitext(audio_path)[1][1:] == 'wav':
         wav_path = audio_path
@@ -170,6 +184,7 @@ def audio_convert(audio_path):
 
 
 def initialize_azure_config_old(subscription_id, lang_code, region):
+    """DEPRECATED: Returns speech_config to run azure ASR"""
     global speechsdk
     import azure.cognitiveservices.speech as speechsdk
 
@@ -179,6 +194,8 @@ def initialize_azure_config_old(subscription_id, lang_code, region):
     return speech_config
 
 def initialize_azure_config(subscription_id, lang_code, region):
+    """Generates necessary info to do Azure Speech requests"""
+
     url = "https://" + region + ".stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=" + lang_code + "&format=detailed"
     fetch_token_url = 'https://westeurope.api.cognitive.microsoft.com/sts/v1.0/issueToken'
     headers = {
@@ -195,6 +212,7 @@ def initialize_azure_config(subscription_id, lang_code, region):
     return {'token':token, 'url':url, 'headers':headers}
 
 def transcribe_with_azure_old(audio_path, speech_config):
+    """DEPRECATED: Does recognition with Azure on give audio."""
     audio_input = speechsdk.AudioConfig(filename=audio_path)
     speech_recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_input)
 
@@ -202,6 +220,7 @@ def transcribe_with_azure_old(audio_path, speech_config):
     return result.text
 
 def transcribe_with_azure(audio_path, speech_config):
+    """DEPRECATED: Sends a Azure API recognition request for audio and returns its transcript"""
     transcript = ''
     with open(audio_path,"rb") as payload:
         response = requests.request("POST", speech_config['url'], headers=speech_config['headers'], data=payload)
@@ -214,17 +233,12 @@ def transcribe_with_azure(audio_path, speech_config):
 
     return transcript
 
-#Converts seconds to otranscribe timestamp
-def timestamp_spanner(sec):
-    ty_res = time.gmtime(sec)
-    res = time.strftime("%H:%M:%S",ty_res)
-    span_str = '<span class="timestamp" data-timestamp="%s">%s</span>'%(sec, res)
-    return span_str
-
 def initialize_api_config(lang, api_url_endpoint, scorer='default'):
+    """Generates necessary info to do ASR with TWB-API"""
     return {'lang': lang, 'scorer':scorer, 'url': api_url_endpoint}
 
 def transcribe_with_asr_api(audio_path, config):
+    """Sends a ASR-API recognition request for audio and returns its transcript"""
     url_endpoint = config['url']
     payload={'lang': config['lang']} #TODO: doesn't get the scorer in. 
     headers = {}
@@ -253,6 +267,8 @@ def transcribe_with_asr_api(audio_path, config):
     return transcript
 
 def get_transcription_of_chunk(complete_audio, start_sec, end_sec, chunk_path, service, speech_config=None):
+    """Transcribes an interval of audio with start and end seconds specified using ASR service"""
+
     start_ms = start_sec * 1000
     end_ms = end_sec * 1000
     
@@ -272,6 +288,8 @@ def get_transcription_of_chunk(complete_audio, start_sec, end_sec, chunk_path, s
     return transcript
 
 def dump_chunk(audio, start_sec, end_sec, chunk_path):
+    """Cuts and places a chunk of audio to path (for revision)"""
+
     start_ms = start_sec * 1000
     end_ms = end_sec * 1000
 
