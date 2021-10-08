@@ -80,12 +80,15 @@ def get_speaker_turns(diarization_output, turn_on_speaker_change, max_segment_le
 def speaker_turns_to_otr(speaker_turns, output_path, write_speaker_id=False):
     otr_text = ""
     for t in speaker_turns:
+        if not 'text' in t:
+            continue 
+
         otr_text += timestamp_spanner(t['start']) + ' '
         
-        if write_speaker_id and 'speaker' in t:
+        if write_speaker_id: #and 'speaker' in t:
             otr_text += '(' + t['speaker'] + ')' + SPEAKER_DELIMITER + " "
-        if 'text' in t:
-            otr_text += t['text']
+        #if 'text' in t:
+        otr_text += t['text']
         otr_text += '<br /><br />'
         
     otr_format_dict = {'text': otr_text, "media": "", "media-time":"0.0"}
@@ -96,16 +99,30 @@ def speaker_turns_to_otr(speaker_turns, output_path, write_speaker_id=False):
 def speaker_turns_to_txt(speaker_turns, output_path, write_speaker_id=False):
     out_text = ""
     for t in speaker_turns:
+        if not 'text' in t:
+            continue 
+            
         out_text += sec_to_timestamp(t['start']) + ' '
         
-        if write_speaker_id and 'speaker' in t:
+        if write_speaker_id:# and 'speaker' in t:
             out_text += '(' + t['speaker'] + ')' + SPEAKER_DELIMITER + " "
-        if 'text' in t:
-            out_text += t['text']
+        #if 'text' in t:
+        out_text += t['text']
         out_text += '\n'
             
     with open(output_path, 'w') as f:
         f.write(out_text)
+
+def print_speakers_data(diarization_dict):
+    speakers_info = {}
+    for s in diarization_dict['content']:
+        if s['label'] not in speakers_info:
+            speakers_info[s['label']] = 1
+        else:
+            speakers_info[s['label']] += 1
+    print("%i speakers detected"%len(speakers_info))
+    for s in speakers_info:
+        print("%s: %i segments"%(s, speakers_info[s]))
 
 def do_diarization(wav_path):
     from pyannote.core import Annotation, Segment
@@ -365,6 +382,9 @@ def main():
     # print("diarization_dict")
     # print(diarization_dict)
 
+    #Print speakers data
+    print_speakers_data(diarization_dict)
+
     do_revision = False
     if not skip_revision_query:
         #Perform speaker label revision (optional)
@@ -445,9 +465,6 @@ def main():
         for org_label in speaker_label_map_dict:
             new_label = speaker_label_map_dict[org_label]
             if new_label in reversed_speaker_label_map_dict:
-                print(new_label)
-                print(org_label)
-                print(reversed_speaker_label_map_dict[new_label])
                 reversed_speaker_label_map_dict[new_label].append(org_label)
             else:
                 reversed_speaker_label_map_dict[new_label] = [org_label]
