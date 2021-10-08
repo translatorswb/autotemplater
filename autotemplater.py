@@ -220,14 +220,17 @@ def transcribe_with_azure_old(audio_path, speech_config):
     return result.text
 
 def transcribe_with_azure(audio_path, speech_config):
-    """DEPRECATED: Sends a Azure API recognition request for audio and returns its transcript"""
+    """Sends a Azure API recognition request for audio and returns its transcript"""
     transcript = ''
     with open(audio_path,"rb") as payload:
         response = requests.request("POST", speech_config['url'], headers=speech_config['headers'], data=payload)
 
         if response.status_code == 200:
             response_json = response.json()
-            transcript = response_json['NBest'][0]['Display']
+            try:
+                transcript = response_json['NBest'][0]['Display']
+            except:
+                pass
         else:
             print("Error processing", audio_path)
 
