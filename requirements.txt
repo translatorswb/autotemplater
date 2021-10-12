@@ -1,4 +1,4 @@
 pydub
 requests
-pyannote
+pyannote.audio
 azure-cognitiveservices-speech
