@@ -24,6 +24,7 @@ SPEAKER_DELIMITER = ':'
 SAMPLE_COUNT = 5
 MAX_SEGMENT_LENGTH = 30.0
 SEGMENT_AT_PAUSE_LENGTH = 5.0
+USE_AZURE_SDK = True #if false, it'll use requests library
 
 parser = argparse.ArgumentParser(description="oTranscribe template maker")
 parser.add_argument('-i', '--audio', type=str, required=True, help='Input audio path')
@@ -183,8 +184,8 @@ def audio_convert(audio_path):
         return audio_path
 
 
-def initialize_azure_config_old(subscription_id, lang_code, region):
-    """DEPRECATED: Returns speech_config to run azure ASR"""
+def initialize_azure_config_sdk(subscription_id, lang_code, region):
+    """Returns speech_config to run azure ASR using Azure speech SDK"""
     global speechsdk
     import azure.cognitiveservices.speech as speechsdk
 
@@ -193,8 +194,8 @@ def initialize_azure_config_old(subscription_id, lang_code, region):
 
     return speech_config
 
-def initialize_azure_config(subscription_id, lang_code, region):
-    """Generates necessary info to do Azure Speech requests"""
+def initialize_azure_config_requests(subscription_id, lang_code, region):
+    """Generates necessary info to do Azure Speech ASR using requests"""
 
     url = "https://" + region + ".stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=" + lang_code + "&format=detailed"
     fetch_token_url = 'https://westeurope.api.cognitive.microsoft.com/sts/v1.0/issueToken'
@@ -211,15 +212,15 @@ def initialize_azure_config(subscription_id, lang_code, region):
         }
     return {'token':token, 'url':url, 'headers':headers}
 
-def transcribe_with_azure_old(audio_path, speech_config):
-    """DEPRECATED: Does recognition with Azure on give audio."""
+def transcribe_with_azure_sdk(audio_path, speech_config):
+    """Does recognition with Azure on give audio using Azure speech SDK"""
     audio_input = speechsdk.AudioConfig(filename=audio_path)
     speech_recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_input)
 
     result = speech_recognizer.recognize_once_async().get()
     return result.text
 
-def transcribe_with_azure(audio_path, speech_config):
+def transcribe_with_azure_requests(audio_path, speech_config):
     """Sends a Azure API recognition request for audio and returns its transcript"""
     transcript = ''
     with open(audio_path,"rb") as payload:
@@ -233,6 +234,7 @@ def transcribe_with_azure(audio_path, speech_config):
                 pass
         else:
             print("Error processing", audio_path)
+            print(response.text.encode('utf8'))
 
     return transcript
 
@@ -269,7 +271,7 @@ def transcribe_with_asr_api(audio_path, config):
         
     return transcript
 
-def get_transcription_of_chunk(complete_audio, start_sec, end_sec, chunk_path, service, speech_config=None):
+def get_transcription_of_chunk(complete_audio, start_sec, end_sec, chunk_path, transcriber_func, speech_config=None):
     """Transcribes an interval of audio with start and end seconds specified using ASR service"""
 
     start_ms = start_sec * 1000
@@ -282,10 +284,11 @@ def get_transcription_of_chunk(complete_audio, start_sec, end_sec, chunk_path, s
     
     audio_segment.export(audio_chunk_path, format="wav")
     
-    if service == ASR_API_FLAG:    
-        transcript = transcribe_with_asr_api(audio_chunk_path, speech_config) 
-    elif service == AZURE_ASR_FLAG:
-        transcript = transcribe_with_azure(audio_chunk_path, speech_config)
+    transcript = transcriber_func(audio_chunk_path, speech_config)
+    #if service == ASR_API_FLAG:    
+    #    transcript = transcribe_with_asr_api(audio_chunk_path, speech_config) 
+    #elif service == AZURE_ASR_FLAG:
+    #    transcript = transcribe_with_azure(audio_chunk_path, speech_config)
     
     #print("%.2f-%.2f: %s"%(start_sec, end_sec, transcript))
     return transcript
@@ -337,16 +340,26 @@ def main():
         else:
             os.mkdir(out_path)
 
-    if asr_service and not asr_service in SUPPORTED_ASR_SERVICE_TAGS:
-        print("ERROR: ASR service %s not supported. Select from %s"%(asr_service, SUPPORTED_ASR_SERVICE_TAGS))
-        sys.exit()
-
     if asr_service and not lang:
         print("ERROR: Specify audio language with -l")
         sys.exit()
 
-    if asr_service==AZURE_ASR_FLAG and not azure_token:
-        print("ERROR: Specify service token to use Azure transcription (-a)")
+    #Determine ASR procedure to use
+    if asr_service==AZURE_ASR_FLAG:
+        if asr_service==AZURE_ASR_FLAG and not azure_token:
+            print("ERROR: Specify service token to use Azure transcription (-a)")
+            sys.exit()
+
+        if USE_AZURE_SDK:
+            transcribe_func = transcribe_with_azure_sdk
+            initialize_azure_config = initialize_azure_config_sdk
+        else:
+            transcribe_func = transcribe_with_azure_requests
+            initialize_azure_config = initialize_azure_config_requests
+    elif asr_service == ASR_API_FLAG:
+        transcribe_func = transcribe_with_asr_api
+    else:
+        print("ERROR: ASR service %s not supported. Select from %s"%(asr_service, SUPPORTED_ASR_SERVICE_TAGS))
         sys.exit()
 
     #Check audio file exists
@@ -528,11 +541,11 @@ def main():
     if asr_service:
         #Create temp directory to store audio chunks
         tmp_dir_path = tempfile.mkdtemp()
-        # print(tmp_dir_path) #DEBUG
+        print("Temp dir:", tmp_dir_path) #DEBUG
         
         #Transcribe speaker turns
         for t in tqdm(speaker_turns, desc="Transcribing segments..."):
-            t['text'] = get_transcription_of_chunk(complete_audio, t['start'], t['end'], tmp_dir_path, asr_service, speech_config)
+            t['text'] = get_transcription_of_chunk(complete_audio, t['start'], t['end'], tmp_dir_path, transcribe_func, speech_config)
             # print("%.2f-%.2f (%s): %s"%(t['start'], t['end'], t['speaker'], t['text']))
 
         #Write transcribed template to disk
