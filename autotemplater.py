@@ -376,7 +376,7 @@ def main():
     out_final_otr_path = os.path.join(out_path ,audio_id + '-autotemplate.otr')
     out_txt_path = os.path.join(out_path ,audio_id + '-transcript.txt')
     out_mapped_json_path = os.path.join(out_path ,audio_id + '-reviseddiarization.json')
-    out_mapping_path = os.path.join(out_path ,audio_id + '-spkrevisionmap.txt')
+    out_mapping_path = os.path.join(out_path ,audio_id + '-spkrevisionmap.json')
 
     #Ensure wav format input
     wav_path = audio_convert(audio_path)
@@ -420,7 +420,6 @@ def main():
         #Perform speaker label revision (optional)
         perform_revision_input = input("Do you want to revise speaker labels? (y for yes) ")
         speaker_label_map_dict = {}
-        print(perform_revision_input)
         
         if perform_revision_input == 'y' or perform_revision_input == 'Y':
             
