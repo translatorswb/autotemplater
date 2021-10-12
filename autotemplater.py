@@ -22,7 +22,7 @@ DEFAULT_AZURE_REGION = 'westeurope'
 SUPPORTED_ASR_SERVICE_TAGS = [ASR_API_FLAG, AZURE_ASR_FLAG]
 SPEAKER_DELIMITER = ':'
 SAMPLE_COUNT = 5
-MAX_SEGMENT_LENGTH = 30.0
+MAX_SEGMENT_LENGTH = 30.0 #seconds
 SEGMENT_AT_PAUSE_LENGTH = 5.0
 USE_AZURE_SDK = True #if false, it'll use requests library (works but sometimes unstable)
 
@@ -122,6 +122,10 @@ def speaker_turns_to_txt(speaker_turns, output_path, write_speaker_id=False):
             
     with open(output_path, 'w') as f:
         f.write(out_text)
+
+def speaker_turns_to_srt(speaker_turns, output_path, write_speaker_id=False):
+    '''#TODO'''
+    return 0
 
 def print_speakers_data(diarization_dict):
     """Prints number of speakers and number of segments for each of them on the screen"""
@@ -375,6 +379,7 @@ def main():
     out_empty_otr_path = os.path.join(out_path ,audio_id + '-diarization.otr')
     out_final_otr_path = os.path.join(out_path ,audio_id + '-autotemplate.otr')
     out_txt_path = os.path.join(out_path ,audio_id + '-transcript.txt')
+    out_srt_path = os.path.join(out_path ,audio_id + '-subtitles.srt')
     out_mapped_json_path = os.path.join(out_path ,audio_id + '-reviseddiarization.json')
     out_mapping_path = os.path.join(out_path ,audio_id + '-spkrevisionmap.json')
 
@@ -552,6 +557,9 @@ def main():
 
         print("Dumping transcribed text", out_txt_path)
         speaker_turns_to_txt(speaker_turns, out_txt_path, write_speaker_id)
+
+        print("Dumping SRT", out_srt_path)
+        speaker_turns_to_srt(speaker_turns, out_txt_path, write_speaker_id)
 
         #Remove temp directory
         shutil.rmtree(tmp_dir_path) #DEBUG
