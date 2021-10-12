@@ -24,7 +24,7 @@ SPEAKER_DELIMITER = ':'
 SAMPLE_COUNT = 5
 MAX_SEGMENT_LENGTH = 30.0
 SEGMENT_AT_PAUSE_LENGTH = 5.0
-USE_AZURE_SDK = True #if false, it'll use requests library
+USE_AZURE_SDK = True #if false, it'll use requests library (works but sometimes unstable)
 
 parser = argparse.ArgumentParser(description="oTranscribe template maker")
 parser.add_argument('-i', '--audio', type=str, required=True, help='Input audio path')
@@ -285,11 +285,7 @@ def get_transcription_of_chunk(complete_audio, start_sec, end_sec, chunk_path, t
     audio_segment.export(audio_chunk_path, format="wav")
     
     transcript = transcriber_func(audio_chunk_path, speech_config)
-    #if service == ASR_API_FLAG:    
-    #    transcript = transcribe_with_asr_api(audio_chunk_path, speech_config) 
-    #elif service == AZURE_ASR_FLAG:
-    #    transcript = transcribe_with_azure(audio_chunk_path, speech_config)
-    
+
     #print("%.2f-%.2f: %s"%(start_sec, end_sec, transcript))
     return transcript
 
@@ -515,6 +511,9 @@ def main():
         with open(out_mapped_json_path, 'w') as f:
             print("Dumping mapped diarization output", out_mapped_json_path)
             f.write(json.dumps(mapped_diarization_dict))
+
+        #Remove revision path
+        shutil.rmtree(project_revision_path)
     else:
         mapped_diarization_dict = diarization_dict
 
