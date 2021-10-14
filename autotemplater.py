@@ -2,7 +2,6 @@
 
 import argparse
 import sys
-import torch
 import time
 import os
 import wave
@@ -12,6 +11,7 @@ import tempfile
 import shutil
 import random
 import requests
+import validators
 from pydub import AudioSegment
 from tqdm import tqdm
 
@@ -25,9 +25,11 @@ SAMPLE_COUNT = 5
 MAX_SEGMENT_LENGTH = 30.0 #seconds
 SEGMENT_AT_PAUSE_LENGTH = 5.0
 USE_AZURE_SDK = True #if false, it'll use requests library (works but sometimes unstable)
+REVISION_PATH = "revision"
+DOWNLOAD_PATH = "download"
 
 parser = argparse.ArgumentParser(description="oTranscribe template maker")
-parser.add_argument('-i', '--audio', type=str, required=True, help='Input audio path')
+parser.add_argument('-i', '--audio', type=str, required=True, help='Input audio path or URL')
 parser.add_argument('-l', '--lang', type=str, help='Transcription language')
 parser.add_argument('-o', '--out', type=str, help='Output directory (default: input audio directory)')
 parser.add_argument('-p', '--punctoken', type=str, help='PunkProse token if sending to remote API (Not implemented)') #TODO
@@ -145,6 +147,7 @@ def do_diarization(wav_path):
 
     from pyannote.core import Annotation, Segment
     from pyannote.audio.features import RawAudio
+    import torch
 
     file = {'audio': wav_path}
     pipeline = torch.hub.load('pyannote/pyannote-audio', 'dia')
@@ -313,7 +316,7 @@ def main():
     #Parse args
     args = parser.parse_args()
 
-    audio_path = args.audio
+    audio_input = args.audio
     out_path = args.out
     lang = args.lang
     azure_token = args.azuretoken
@@ -325,9 +328,41 @@ def main():
     skip_revision_query = args.skiprevision
 
     #Input checks
-    if not audio_path:
-        print("ERROR: Specify input audio path (-i)")
+    if not audio_input:
+        print("ERROR: Specify input audio path or URL (-i)")
         sys.exit()
+
+    if asr_service and not lang:
+        print("ERROR: Specify audio language with -l")
+        sys.exit()
+
+    #Check if input is URL
+    if validators.url(audio_input):
+        #Open download directory
+        if not os.path.exists(DOWNLOAD_PATH):
+            os.makedirs(DOWNLOAD_PATH)
+
+        audio_name = audio_input.split("/")[-1]
+        audio_path = os.path.join(DOWNLOAD_PATH, audio_name)
+
+        if not os.path.exists(audio_path):
+            print("Downloading audio")
+            #download audio
+            try:
+                response = requests.get(audio_input)
+                open(audio_path, 'wb').write(response.content)
+            except:
+                print("ERROR: Couldn't download audio file given by URL")
+                sys.exit()
+            print("Audio downloaded to", audio_path)
+        else:
+            print("Using cached audio file", audio_path)
+    else:
+        audio_path = audio_input
+        #Check audio file exists
+        if not os.path.exists(audio_path):
+            print("ERROR: File not found", audio_path)
+            sys.exit()
 
     if not out_path:
         out_path = os.path.dirname(audio_path)
@@ -340,32 +375,26 @@ def main():
         else:
             os.mkdir(out_path)
 
-    if asr_service and not lang:
-        print("ERROR: Specify audio language with -l")
-        sys.exit()
-
     #Determine ASR procedure to use
-    if asr_service==AZURE_ASR_FLAG:
-        if asr_service==AZURE_ASR_FLAG and not azure_token:
-            print("ERROR: Specify service token to use Azure transcription (-a)")
-            sys.exit()
+    if asr_service:
+        if asr_service==AZURE_ASR_FLAG:
+            if asr_service==AZURE_ASR_FLAG and not azure_token:
+                print("ERROR: Specify service token to use Azure transcription (-a)")
+                sys.exit()
 
-        if USE_AZURE_SDK:
-            transcribe_func = transcribe_with_azure_sdk
-            initialize_azure_config = initialize_azure_config_sdk
+            if USE_AZURE_SDK:
+                transcribe_func = transcribe_with_azure_sdk
+                initialize_azure_config = initialize_azure_config_sdk
+            else:
+                transcribe_func = transcribe_with_azure_requests
+                initialize_azure_config = initialize_azure_config_requests
+        elif asr_service == ASR_API_FLAG:
+            transcribe_func = transcribe_with_asr_api
         else:
-            transcribe_func = transcribe_with_azure_requests
-            initialize_azure_config = initialize_azure_config_requests
-    elif asr_service == ASR_API_FLAG:
-        transcribe_func = transcribe_with_asr_api
+            print("ERROR: ASR service %s not supported. Select from %s"%(asr_service, SUPPORTED_ASR_SERVICE_TAGS))
+            sys.exit()
     else:
-        print("ERROR: ASR service %s not supported. Select from %s"%(asr_service, SUPPORTED_ASR_SERVICE_TAGS))
-        sys.exit()
-
-    #Check audio file exists
-    if not os.path.exists(audio_path):
-        print("ERROR: File not found", audio_path)
-        sys.exit()
+        print("WARNING: No ASR service is chosen. Will only do diarization.")
 
     if turn_on == 'speaker':
         turn_on_speaker_change = True
@@ -442,6 +471,10 @@ def main():
                 do_revision = True
 
     if do_revision:
+        #Open directory for revision
+        if not os.path.exists(REVISION_PATH):
+            os.makedirs(REVISION_PATH)
+
         #Do revision
         speaker_segments = {}
         for i, segment_info in enumerate(diarization_dict['content']):
@@ -450,11 +483,6 @@ def main():
             else:
                 speaker_segments[segment_info['label']].append(i)
 
-        #Open directory for revision
-        revision_path = "revision"
-        if not os.path.exists(revision_path):
-            os.makedirs(revision_path)
-            
         project_revision_path = os.path.join(revision_path, audio_id)
 
         if not os.path.exists(project_revision_path):
