@@ -19,14 +19,17 @@ API_TRANSCRIBE_URL = "http://127.0.0.1:8010/transcribe/short"  #default running 
 ASR_API_FLAG = 'api'
 AZURE_ASR_FLAG = 'azure'
 DEFAULT_AZURE_REGION = 'westeurope'
-SUPPORTED_ASR_SERVICE_TAGS = [ASR_API_FLAG, AZURE_ASR_FLAG]
+REVISION_PATH = "revision"
+DOWNLOAD_PATH = "download"
 SPEAKER_DELIMITER = ':'
+SUPPORTED_ASR_SERVICE_TAGS = [ASR_API_FLAG, AZURE_ASR_FLAG]
+
 SAMPLE_COUNT = 5
 MAX_SEGMENT_LENGTH = 30.0 #seconds
 SEGMENT_AT_PAUSE_LENGTH = 5.0
+
 USE_AZURE_SDK = True #if false, it'll use requests library (works but sometimes unstable)
-REVISION_PATH = "revision"
-DOWNLOAD_PATH = "download"
+DUMMY_TRANSCRIPTION = FAlse  #Emulates transcription for debugging
 
 parser = argparse.ArgumentParser(description="oTranscribe template maker")
 parser.add_argument('-i', '--audio', type=str, required=True, help='Input audio path or URL')
@@ -42,9 +45,16 @@ parser.add_argument('-s', '--sid', action='store_true', help='Write speaker id o
 parser.add_argument('-v', '--skiprevision', action='store_true', help='Skip revision query (default: False)')
 
 def sec_to_timestamp(sec) -> str:
-    """Convert seconds to timestamp format"""
+    """Convert seconds to hh:mm:ss timestamp format"""
     ty_res = time.gmtime(sec)
     res = time.strftime("%H:%M:%S",ty_res)
+    return res
+
+def sec_to_srt_timestamp(sec) -> str:
+    """Convert seconds to hh:mm:ss timestamp format"""
+    ty_res = time.gmtime(sec)
+    time_in_ms = sec * 1000
+    res = time.strftime("%H:%M:%S", ty_res) + ",%03.0f"%(time_in_ms%1000)
     return res
 
 def timestamp_spanner(sec) -> str:
@@ -126,8 +136,25 @@ def speaker_turns_to_txt(speaker_turns, output_path, write_speaker_id=False):
         f.write(out_text)
 
 def speaker_turns_to_srt(speaker_turns, output_path, write_speaker_id=False):
-    '''#TODO'''
-    return 0
+    """Creates an SRT subtitle from speaker turn list"""
+
+    out_text = ""
+    for i, t in enumerate(speaker_turns):
+        if 'text' in t:
+            if not t['text']:
+                continue 
+            
+        out_text += str(i) + '\n'
+        out_text += sec_to_srt_timestamp(t['start']) + ' --> ' + sec_to_srt_timestamp(t['end']) + '\n'
+        
+        if write_speaker_id:# and 'speaker' in t:
+            out_text += '(' + t['speaker'] + ')' + SPEAKER_DELIMITER + " "
+        if 'text' in t:
+            out_text += t['text']
+        out_text += '\n\n'
+            
+    with open(output_path, 'w') as f:
+        f.write(out_text)
 
 def print_speakers_data(diarization_dict):
     """Prints number of speakers and number of segments for each of them on the screen"""
@@ -278,6 +305,9 @@ def transcribe_with_asr_api(audio_path, config):
         
     return transcript
 
+def dummy_transcriber(path, config):
+    return "Lorem ipsum dolor sit amet"
+
 def get_transcription_of_chunk(complete_audio, start_sec, end_sec, chunk_path, transcriber_func, speech_config=None):
     """Transcribes an interval of audio with start and end seconds specified using ASR service"""
 
@@ -393,6 +423,8 @@ def main():
         else:
             print("ERROR: ASR service %s not supported. Select from %s"%(asr_service, SUPPORTED_ASR_SERVICE_TAGS))
             sys.exit()
+    elif DUMMY_TRANSCRIPTION:
+        transcribe_func = dummy_transcriber
     else:
         print("WARNING: No ASR service is chosen. Will only do diarization.")
 
@@ -565,6 +597,10 @@ def main():
     elif asr_service == AZURE_ASR_FLAG:
         print("Initializing ASR with Azure")
         speech_config = initialize_azure_config(azure_token, lang, azure_region)
+    elif DUMMY_TRANSCRIPTION:
+        print("Dummy transcription for debugging")
+        asr_service = True
+        speech_config = None
     else:
         print("Skipping ASR")
         asr_service = None
@@ -587,7 +623,7 @@ def main():
         speaker_turns_to_txt(speaker_turns, out_txt_path, write_speaker_id)
 
         print("Dumping SRT", out_srt_path)
-        speaker_turns_to_srt(speaker_turns, out_txt_path, write_speaker_id)
+        speaker_turns_to_srt(speaker_turns, out_srt_path, write_speaker_id)
 
         #Remove temp directory
         shutil.rmtree(tmp_dir_path) #DEBUG
