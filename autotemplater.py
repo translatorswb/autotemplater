@@ -29,7 +29,7 @@ MAX_SEGMENT_LENGTH = 30.0 #seconds
 SEGMENT_AT_PAUSE_LENGTH = 5.0
 
 USE_AZURE_SDK = True #if false, it'll use requests library (works but sometimes unstable)
-DUMMY_TRANSCRIPTION = FAlse  #Emulates transcription for debugging
+DUMMY_TRANSCRIPTION = False  #Emulates transcription for debugging
 
 parser = argparse.ArgumentParser(description="oTranscribe template maker")
 parser.add_argument('-i', '--audio', type=str, required=True, help='Input audio path or URL')
