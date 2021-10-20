@@ -26,9 +26,11 @@ SUPPORTED_ASR_SERVICE_TAGS = [ASR_API_FLAG, AZURE_ASR_FLAG]
 
 SAMPLE_COUNT = 5
 MAX_SEGMENT_LENGTH = 30.0 #seconds
+SUBTITLE_MAX_SEGMENT_LENGTH = 3.5
 SEGMENT_AT_PAUSE_LENGTH = 5.0
+SUB_END_BUFFER = 0.5 #seconds
 
-USE_AZURE_SDK = True #if false, it'll use requests library (works but sometimes unstable)
+USE_AZURE_SDK = False #if false, it'll use requests library (works but sometimes unstable)
 DUMMY_TRANSCRIPTION = False  #Emulates transcription for debugging
 
 parser = argparse.ArgumentParser(description="oTranscribe template maker")
@@ -43,6 +45,7 @@ parser.add_argument('-u', '--apiurl', type=str, help='ASR-API URL endpoint (defa
 parser.add_argument('-t', '--turn', type=str, help='Turn on speaker or speech segment (default: segment)', default='segment')
 parser.add_argument('-s', '--sid', action='store_true', help='Write speaker id on turns (default: False)')
 parser.add_argument('-v', '--skiprevision', action='store_true', help='Skip revision query (default: False)')
+parser.add_argument('-b', '--subtimize', action='store_true', help='Optimize parameters for subtitling (default:False)')
 
 def sec_to_timestamp(sec) -> str:
     """Convert seconds to hh:mm:ss timestamp format"""
@@ -98,16 +101,18 @@ def speaker_turns_to_otr(speaker_turns, output_path, write_speaker_id=False):
 
     otr_text = ""
     for t in speaker_turns:
-        if 'text' in t:
-            if not t['text']:
+        if 'rawtext' in t or 'puncdtext' in t:
+            if not t['puncdtext'] and not t['rawtext']:
                 continue 
 
         otr_text += timestamp_spanner(t['start']) + ' '
         
         if write_speaker_id: #and 'speaker' in t:
             otr_text += '(' + t['speaker'] + ')' + SPEAKER_DELIMITER + " "
-        if 'text' in t:
-            otr_text += t['text']
+        if 'puncdtext' in t and t['puncdtext']:
+            otr_text += t['puncdtext']
+        elif 'rawtext' in t and t['rawtext']:
+            otr_text += t['rawtext']
         otr_text += '<br /><br />'
         
     otr_format_dict = {'text': otr_text, "media": "", "media-time":"0.0"}
@@ -120,16 +125,18 @@ def speaker_turns_to_txt(speaker_turns, output_path, write_speaker_id=False):
 
     out_text = ""
     for t in speaker_turns:
-        if 'text' in t:
-            if not t['text']:
-                continue 
+        if 'rawtext' in t or 'puncdtext' in t:
+            if not t['puncdtext'] and not t['rawtext']:
+                continue  
             
         out_text += sec_to_timestamp(t['start']) + ' '
         
         if write_speaker_id:# and 'speaker' in t:
             out_text += '(' + t['speaker'] + ')' + SPEAKER_DELIMITER + " "
-        if 'text' in t:
-            out_text += t['text']
+        if 'puncdtext' in t and t['puncdtext']:
+            out_text += t['puncdtext']
+        elif 'rawtext' in t and t['rawtext']:
+            out_text += t['rawtext']
         out_text += '\n'
             
     with open(output_path, 'w') as f:
@@ -140,17 +147,29 @@ def speaker_turns_to_srt(speaker_turns, output_path, write_speaker_id=False):
 
     out_text = ""
     for i, t in enumerate(speaker_turns):
-        if 'text' in t:
-            if not t['text']:
+        if 'rawtext' in t:
+            if not t['rawtext']:
                 continue 
             
+        #subtitles can stay on the screen longer than the actual end timestamp
+        next_t = None
+        if i+1 < len(speaker_turns):
+            next_t = speaker_turns[i+1]
+
+        if next_t and t['end'] + SUB_END_BUFFER < next_t['start']:
+            end_timestamp = t['end'] + SUB_END_BUFFER
+        elif next_t:
+            end_timestamp = next_t['start']
+        else:
+            end_timestamp = t['end'] + SUB_END_BUFFER
+
         out_text += str(i) + '\n'
-        out_text += sec_to_srt_timestamp(t['start']) + ' --> ' + sec_to_srt_timestamp(t['end']) + '\n'
+        out_text += sec_to_srt_timestamp(t['start']) + ' --> ' + sec_to_srt_timestamp(end_timestamp) + '\n'
         
         if write_speaker_id:# and 'speaker' in t:
             out_text += '(' + t['speaker'] + ')' + SPEAKER_DELIMITER + " "
-        if 'text' in t:
-            out_text += t['text']
+        if 'rawtext' in t:
+            out_text += t['rawtext']
         out_text += '\n\n'
             
     with open(output_path, 'w') as f:
@@ -225,8 +244,28 @@ def initialize_azure_config_sdk(subscription_id, lang_code, region):
 
     speech_config = speechsdk.SpeechConfig(subscription=subscription_id, region=region)
     speech_config.speech_recognition_language=lang_code
-
+    speech_config.request_word_level_timestamps() 
     return speech_config
+
+def transcribe_with_azure_sdk(audio_path, speech_config):
+    """Does recognition with Azure on give audio using Azure speech SDK"""
+    audio_input = speechsdk.AudioConfig(filename=audio_path)
+    speech_recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_input)
+
+    result = speech_recognizer.recognize_once_async().get()
+
+    response_json = json.loads(result.json) 
+
+    try:
+        raw_transcript = response_json['NBest'][0]['ITN']
+        punctuated_transcript = response_json['NBest'][0]['Display']
+        word_timing = response_json["NBest"][0]['Words']
+    except:
+        raw_transcript = ''
+        punctuated_transcript = ''
+        word_timing = []
+
+    return raw_transcript, punctuated_transcript, word_timing
 
 def initialize_azure_config_requests(subscription_id, lang_code, region):
     """Generates necessary info to do Azure Speech ASR using requests"""
@@ -246,31 +285,25 @@ def initialize_azure_config_requests(subscription_id, lang_code, region):
         }
     return {'token':token, 'url':url, 'headers':headers}
 
-def transcribe_with_azure_sdk(audio_path, speech_config):
-    """Does recognition with Azure on give audio using Azure speech SDK"""
-    audio_input = speechsdk.AudioConfig(filename=audio_path)
-    speech_recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_input)
-
-    result = speech_recognizer.recognize_once_async().get()
-    return result.text
-
 def transcribe_with_azure_requests(audio_path, speech_config):
     """Sends a Azure API recognition request for audio and returns its transcript"""
-    transcript = ''
+    raw_transcript = ''
+    punctuated_transcript = ''
     with open(audio_path,"rb") as payload:
         response = requests.request("POST", speech_config['url'], headers=speech_config['headers'], data=payload)
 
         if response.status_code == 200:
             response_json = response.json()
             try:
-                transcript = response_json['NBest'][0]['Display']
+                raw_transcript = response_json['NBest'][0]['ITN']
+                punctuated_transcript = response_json['NBest'][0]['Display']
             except:
                 pass
         else:
             print("Error processing", audio_path)
             print(response.text.encode('utf8'))
 
-    return transcript
+    return raw_transcript, punctuated_transcript, [] #TODO: word timing info
 
 def initialize_api_config(lang, api_url_endpoint, scorer='default'):
     """Generates necessary info to do ASR with TWB-API"""
@@ -303,7 +336,7 @@ def transcribe_with_asr_api(audio_path, config):
         print(response_dict)
         transcript = ""
         
-    return transcript
+    return transcript, None, None #TODO: punctuated transcript and word timing info
 
 def dummy_transcriber(path, config):
     return "Lorem ipsum dolor sit amet"
@@ -321,10 +354,10 @@ def get_transcription_of_chunk(complete_audio, start_sec, end_sec, chunk_path, t
     
     audio_segment.export(audio_chunk_path, format="wav")
     
-    transcript = transcriber_func(audio_chunk_path, speech_config)
+    raw_transcript, post_transcript, word_timing = transcriber_func(audio_chunk_path, speech_config)
 
     #print("%.2f-%.2f: %s"%(start_sec, end_sec, transcript))
-    return transcript
+    return raw_transcript, post_transcript, word_timing
 
 def dump_chunk(audio, start_sec, end_sec, chunk_path):
     """Cuts and places a chunk of audio to path (for revision)"""
@@ -356,6 +389,7 @@ def main():
     write_speaker_id = args.sid
     asr_api_url_endpoint = args.apiurl
     skip_revision_query = args.skiprevision
+    subtimize = args.subtimize
 
     #Input checks
     if not audio_input:
@@ -433,6 +467,14 @@ def main():
     else:
         turn_on_speaker_change = False
     print('Turn on speaker change:', turn_on_speaker_change)
+
+    if subtimize:
+        segment_length = SUBTITLE_MAX_SEGMENT_LENGTH
+        turn_on_speaker_change = False
+    else:
+        segment_length = MAX_SEGMENT_LENGTH
+
+    print("Maximum segment length:", segment_length)
 
     #Output files 
     audio_id = os.path.splitext(os.path.basename(audio_path))[0]
@@ -582,7 +624,7 @@ def main():
         mapped_diarization_dict = diarization_dict
 
     #Make empty OTR template
-    speaker_turns = get_speaker_turns(mapped_diarization_dict['content'], turn_on_speaker_change)
+    speaker_turns = get_speaker_turns(mapped_diarization_dict['content'], turn_on_speaker_change, max_segment_length = segment_length)
 
     #print(speaker_turns) #DEBUG
     
@@ -612,8 +654,13 @@ def main():
         
         #Transcribe speaker turns
         for t in tqdm(speaker_turns, desc="Transcribing segments..."):
-            t['text'] = get_transcription_of_chunk(complete_audio, t['start'], t['end'], tmp_dir_path, transcribe_func, speech_config)
+            t['rawtext'], t['puncdtext'], t['wordtiming'] = get_transcription_of_chunk(complete_audio, t['start'], t['end'], tmp_dir_path, transcribe_func, speech_config)
             # print("%.2f-%.2f (%s): %s"%(t['start'], t['end'], t['speaker'], t['text']))
+
+        #DEBUG
+        # print("----")
+        # print(speaker_turns)
+        # print("----")
 
         #Write transcribed template to disk
         print("Dumping transcribed template", out_final_otr_path)
