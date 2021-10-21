@@ -31,7 +31,7 @@ SUBTITLE_MAX_TURN_LENGTH = 4.0
 SEGMENT_AT_PAUSE_LENGTH = 5.0
 SUB_END_BUFFER = 0.5 #seconds
 
-USE_AZURE_SDK = False #if false, it'll use requests library (works but sometimes unstable)
+USE_AZURE_SDK = True #if false, it'll use requests library (works but sometimes unstable)
 DUMMY_TRANSCRIPTION = False  #Emulates transcription for debugging
 
 parser = argparse.ArgumentParser(description="oTranscribe template maker")
@@ -697,10 +697,10 @@ def main():
             # print("%.2f-%.2f (%s): %s"%(t['start'], t['end'], t['speaker'], t['text']))
 
         #DEBUG
-        print("----")
-        for s in speaker_turns:
-            print(s)
-        print("----")
+        #print("----")
+        #for s in speaker_turns:
+        #    print(s)
+        #print("----")
 
         #Force max_turn_length if there's word timing information
         #TODO:...
