@@ -15,7 +15,8 @@ import validators
 from pydub import AudioSegment
 from tqdm import tqdm
 
-API_TRANSCRIBE_URL = "http://127.0.0.1:8010/transcribe/short"  #default running on local
+API_TRANSCRIBE_URL = "http://127.0.0.1:8010/transcribe"  #default running on local
+API_TRANSCRIBE_URL_ENDPOINT = "short"
 ASR_API_FLAG = 'api'
 AZURE_ASR_FLAG = 'azure'
 DEFAULT_AZURE_REGION = 'westeurope'
@@ -25,8 +26,8 @@ SPEAKER_DELIMITER = ':'
 SUPPORTED_ASR_SERVICE_TAGS = [ASR_API_FLAG, AZURE_ASR_FLAG]
 
 SAMPLE_COUNT = 5
-MAX_SEGMENT_LENGTH = 30.0 #seconds
-SUBTITLE_MAX_SEGMENT_LENGTH = 3.5
+REGULAR_MAX_TURN_LENGTH = 30.0 #seconds
+SUBTITLE_MAX_TURN_LENGTH = 4.0
 SEGMENT_AT_PAUSE_LENGTH = 5.0
 SUB_END_BUFFER = 0.5 #seconds
 
@@ -67,34 +68,44 @@ def timestamp_spanner(sec) -> str:
     span_str = '<span class="timestamp" data-timestamp="%s">%s</span>'%(sec, res)
     return span_str
 
-def get_speaker_turns(diarization_output, turn_on_speaker_change, max_segment_length = MAX_SEGMENT_LENGTH, segment_at_pause_length = SEGMENT_AT_PAUSE_LENGTH):
+def get_speaker_turns(diarization_output, turn_on_segment, max_turn_length = REGULAR_MAX_TURN_LENGTH, segment_at_pause_length = SEGMENT_AT_PAUSE_LENGTH):
     """Makes a minimal speaker turn list from diarization output. Merges segments that belong to same speaker"""
 
     speaker_turns = []
     current_turn = {'speaker':None, 'start':0.0, 'end':0.0}
-    for s in diarization_output:
+    for i, s in enumerate(diarization_output):
         speaker_change = not s['label'] == current_turn['speaker']
         current_turn_length = current_turn['end'] - current_turn['start']
         pause_from_last_segment = s['segment']['start'] - current_turn['end']
+        
+        #calculate total length with the upcoming segment
+        length_with_next_segment = 0.0
+        if i + 1 < len(diarization_output):
+            length_with_next_segment = diarization_output[i+1]['segment']['end'] - current_turn['start']
 
-        if not turn_on_speaker_change or speaker_change or current_turn_length > max_segment_length or pause_from_last_segment >= segment_at_pause_length:
+        if turn_on_segment or speaker_change or length_with_next_segment > max_turn_length or pause_from_last_segment >= segment_at_pause_length:
             #close current turn (unless it's the first turn)
             if current_turn['speaker']:
                 speaker_turns.append(current_turn)
+                if current_turn_length > max_turn_length:
+                    current_turn['toolong'] = True
 
             #start new turn
-            current_turn = {}
-            current_turn['start'] = s['segment']['start']
-            current_turn['end'] = s['segment']['end']
-            current_turn['speaker'] = s['label']
+            current_turn = {'start':s['segment']['start'], 'end':s['segment']['end'],
+                            'speaker':s['label'], 'toolong': False}
         else:
             current_turn['end'] = s['segment']['end']
 
+    #Grab that last remaining segment
     if current_turn:
         current_turn['end'] = s['segment']['end']
         speaker_turns.append(current_turn)
+        if current_turn_length > max_turn_length:
+            current_turn['toolong'] = True
             
     return speaker_turns
+
+
 
 def speaker_turns_to_otr(speaker_turns, output_path, write_speaker_id=False):
     """Creates an OTR template from speaker turn list"""
@@ -184,9 +195,10 @@ def print_speakers_data(diarization_dict):
             speakers_info[s['label']] = 1
         else:
             speakers_info[s['label']] += 1
-    print("%i speakers detected"%len(speakers_info))
+    print("%i speakers detected"%len(speakers_info), end=", ")
     for s in speakers_info:
-        print("%s: %i segments"%(s, speakers_info[s]))
+        print("%s: %i segments"%(s, speakers_info[s]), end=' ')
+    print()
 
 def do_diarization(wav_path):
     """Performs pyannote diarization on wav file and outputs its results"""
@@ -213,7 +225,6 @@ def audio_convert(audio_path):
             framerate = wf.getframerate()
 
             if wf.getnchannels() != 1:
-                print("Wav not mono")
                 do_convert = True
         except:
             do_convert = True
@@ -225,14 +236,13 @@ def audio_convert(audio_path):
             do_convert = True
 
     if do_convert:
+        print("Converting audio to wav", wav_path)
         process = subprocess.call(['ffmpeg', '-loglevel', 'quiet', '-i',
                                         audio_path, '-ac', '1', wav_path])
 
-        print("Converting audio to wav", wav_path)
-
         return wav_path
     else:
-        print("Reading wav", audio_path)
+        print("Reading wav file", audio_path)
 
         return audio_path
 
@@ -245,6 +255,8 @@ def initialize_azure_config_sdk(subscription_id, lang_code, region):
     speech_config = speechsdk.SpeechConfig(subscription=subscription_id, region=region)
     speech_config.speech_recognition_language=lang_code
     speech_config.request_word_level_timestamps() 
+
+    #TODO: Make sure lang_code is supported
     return speech_config
 
 def transcribe_with_azure_sdk(audio_path, speech_config):
@@ -283,6 +295,10 @@ def initialize_azure_config_requests(subscription_id, lang_code, region):
           'Content-Type': 'audio/wave',
           'Accept': 'application/json'
         }
+
+    #TODO: Make sure lang_code is supported
+    #TODO: Get word alignment info
+
     return {'token':token, 'url':url, 'headers':headers}
 
 def transcribe_with_azure_requests(audio_path, speech_config):
@@ -297,6 +313,7 @@ def transcribe_with_azure_requests(audio_path, speech_config):
             try:
                 raw_transcript = response_json['NBest'][0]['ITN']
                 punctuated_transcript = response_json['NBest'][0]['Display']
+                #TODO: Get word alignment info
             except:
                 pass
         else:
@@ -305,8 +322,24 @@ def transcribe_with_azure_requests(audio_path, speech_config):
 
     return raw_transcript, punctuated_transcript, [] #TODO: word timing info
 
-def initialize_api_config(lang, api_url_endpoint, scorer='default'):
+def initialize_api_config(lang, api_url, scorer='default'):
     """Generates necessary info to do ASR with TWB-API"""
+    all_good = False
+    try:
+        response = requests.request("GET", api_url, headers={})
+
+        if lang in response.json()['languages']:
+            all_good = True
+        else:
+            print("ERROR: Language %s not supported by ASR API"%lang)
+    except Exception as e:
+        print("ERROR: Cannot establish connection with ASR API")
+        print(e)
+
+    if not all_good:
+        return None
+
+    api_url_endpoint = api_url + '/' + API_TRANSCRIBE_URL_ENDPOINT
     return {'lang': lang, 'scorer':scorer, 'url': api_url_endpoint}
 
 def transcribe_with_asr_api(audio_path, config):
@@ -325,7 +358,7 @@ def transcribe_with_asr_api(audio_path, config):
     except Exception as e:
         print("ERROR: Cannot establish connection with ASR API")
         print(e)
-        return ""
+        sys.exit()
     
     response_dict = response.json()
 
@@ -400,45 +433,6 @@ def main():
         print("ERROR: Specify audio language with -l")
         sys.exit()
 
-    #Check if input is URL
-    if validators.url(audio_input):
-        #Open download directory
-        if not os.path.exists(DOWNLOAD_PATH):
-            os.makedirs(DOWNLOAD_PATH)
-
-        audio_name = audio_input.split("/")[-1]
-        audio_path = os.path.join(DOWNLOAD_PATH, audio_name)
-
-        if not os.path.exists(audio_path):
-            print("Downloading audio")
-            #download audio
-            try:
-                response = requests.get(audio_input)
-                open(audio_path, 'wb').write(response.content)
-            except:
-                print("ERROR: Couldn't download audio file given by URL")
-                sys.exit()
-            print("Audio downloaded to", audio_path)
-        else:
-            print("Using cached audio file", audio_path)
-    else:
-        audio_path = audio_input
-        #Check audio file exists
-        if not os.path.exists(audio_path):
-            print("ERROR: File not found", audio_path)
-            sys.exit()
-
-    if not out_path:
-        out_path = os.path.dirname(audio_path)
-        print("WARNING: Output directory not specified (-o). Will put results to audio directory.")
-    else:
-        if os.path.exists(out_path):
-            if not os.path.isdir(out_path):
-                print("ERROR: %s is a file"%out_path)
-                sys.exit()
-        else:
-            os.mkdir(out_path)
-
     #Determine ASR procedure to use
     if asr_service:
         if asr_service==AZURE_ASR_FLAG:
@@ -459,22 +453,81 @@ def main():
             sys.exit()
     elif DUMMY_TRANSCRIPTION:
         transcribe_func = dummy_transcriber
-    else:
-        print("WARNING: No ASR service is chosen. Will only do diarization.")
 
     if turn_on == 'speaker':
-        turn_on_speaker_change = True
+        turn_on_segment = True
     else:
-        turn_on_speaker_change = False
-    print('Turn on speaker change:', turn_on_speaker_change)
-
+        turn_on_segment = False
+    
     if subtimize:
-        segment_length = SUBTITLE_MAX_SEGMENT_LENGTH
-        turn_on_speaker_change = False
+        max_turn_length = SUBTITLE_MAX_TURN_LENGTH
     else:
-        segment_length = MAX_SEGMENT_LENGTH
+        max_turn_length = REGULAR_MAX_TURN_LENGTH
 
-    print("Maximum segment length:", segment_length)
+    #Initialize transcription service
+    if asr_service == ASR_API_FLAG:
+        speech_config = initialize_api_config(lang, asr_api_url_endpoint)
+        if not speech_config:
+            print("Couldn't initialize ASR API. Exiting.")
+            sys.exit()
+    elif asr_service == AZURE_ASR_FLAG:
+        speech_config = initialize_azure_config(azure_token, lang, azure_region)
+        if not speech_config:
+            print("Couldn't initialize Azure ASR. Exiting.")
+            sys.exit()
+    elif DUMMY_TRANSCRIPTION:
+        print("Dummy transcription for debugging")
+        asr_service = True
+        speech_config = None
+    else:
+        asr_service = None
+
+    #Check if input is URL
+    if validators.url(audio_input):
+        #Open download directory
+        if not os.path.exists(DOWNLOAD_PATH):
+            os.makedirs(DOWNLOAD_PATH)
+
+        audio_name = audio_input.split("/")[-1]
+        audio_path = os.path.join(DOWNLOAD_PATH, audio_name)
+
+        if not os.path.exists(audio_path):
+            print("Downloading audio given by URL")
+            #download audio
+            try:
+                response = requests.get(audio_input)
+                open(audio_path, 'wb').write(response.content)
+            except:
+                print("ERROR: Couldn't download audio file given by URL")
+                sys.exit()
+            print("Audio downloaded to", audio_path)
+        else:
+            print("Using cached audio file", audio_path)
+    else:
+        audio_path = audio_input
+        #Check audio file exists
+        if not os.path.exists(audio_path):
+            print("ERROR: File not found", audio_path)
+            sys.exit()
+
+    #Determine output path
+    if not out_path:
+        out_path = os.path.dirname(audio_path)
+    else:
+        if os.path.exists(out_path):
+            if not os.path.isdir(out_path):
+                print("ERROR: %s is a file"%out_path)
+                sys.exit()
+        else:
+            os.mkdir(out_path)
+
+    #Report on setup
+    print("ASR Service:", asr_service)
+    print("Output path:", out_path)
+    print('Turn on segment:', turn_on_segment)
+    print("Maximum turn length:", max_turn_length)
+    print("Optimize to subtitle:", subtimize)
+    print("Skip diarization revision:", skip_revision_query)
 
     #Output files 
     audio_id = os.path.splitext(os.path.basename(audio_path))[0]
@@ -485,6 +538,7 @@ def main():
     out_srt_path = os.path.join(out_path ,audio_id + '-subtitles.srt')
     out_mapped_json_path = os.path.join(out_path ,audio_id + '-reviseddiarization.json')
     out_mapping_path = os.path.join(out_path ,audio_id + '-spkrevisionmap.json')
+    out_asr_path = os.path.join(out_path, audio_id + '-asr.json') 
 
     #Ensure wav format input
     wav_path = audio_convert(audio_path)
@@ -500,7 +554,9 @@ def main():
             diarization_dict_data = f.read()
             
         diarization_dict = json.loads(diarization_dict_data)
-        skip_revision_query = True
+        if not skip_revision_query:
+            skip_revision_query = True
+            print("WARNING: Skipping diarization revision since revised diarization is found")
     elif os.path.exists(out_json_path):
         #Load diarization dictionary
         print("Reading raw diarization output", out_json_path)
@@ -516,9 +572,6 @@ def main():
         with open(out_json_path, 'w') as f:
             print("Dumping raw diarization output", out_json_path)
             f.write(json.dumps(diarization_dict))
-
-    # print("diarization_dict")
-    # print(diarization_dict)
 
     #Print speakers data
     print_speakers_data(diarization_dict)
@@ -624,7 +677,8 @@ def main():
         mapped_diarization_dict = diarization_dict
 
     #Make empty OTR template
-    speaker_turns = get_speaker_turns(mapped_diarization_dict['content'], turn_on_speaker_change, max_segment_length = segment_length)
+    print("Converting segments to turns")
+    speaker_turns = get_speaker_turns(mapped_diarization_dict['content'], turn_on_segment, max_turn_length = max_turn_length)
 
     #print(speaker_turns) #DEBUG
     
@@ -632,35 +686,29 @@ def main():
     print("Dumping diarized template", out_empty_otr_path)
     speaker_turns_to_otr(speaker_turns, out_empty_otr_path, write_speaker_id)
 
-    #Initialize transcription
-    if asr_service == ASR_API_FLAG:
-        print("Initializing ASR with API on %s"%asr_api_url_endpoint)
-        speech_config = initialize_api_config(lang, asr_api_url_endpoint)
-    elif asr_service == AZURE_ASR_FLAG:
-        print("Initializing ASR with Azure")
-        speech_config = initialize_azure_config(azure_token, lang, azure_region)
-    elif DUMMY_TRANSCRIPTION:
-        print("Dummy transcription for debugging")
-        asr_service = True
-        speech_config = None
-    else:
-        print("Skipping ASR")
-        asr_service = None
-
     if asr_service:
         #Create temp directory to store audio chunks
         tmp_dir_path = tempfile.mkdtemp()
         print("Temp dir:", tmp_dir_path) #DEBUG
         
         #Transcribe speaker turns
-        for t in tqdm(speaker_turns, desc="Transcribing segments..."):
+        for t in tqdm(speaker_turns, desc="Transcribing segments"):
             t['rawtext'], t['puncdtext'], t['wordtiming'] = get_transcription_of_chunk(complete_audio, t['start'], t['end'], tmp_dir_path, transcribe_func, speech_config)
             # print("%.2f-%.2f (%s): %s"%(t['start'], t['end'], t['speaker'], t['text']))
 
         #DEBUG
-        # print("----")
-        # print(speaker_turns)
-        # print("----")
+        print("----")
+        for s in speaker_turns:
+            print(s)
+        print("----")
+
+        #Force max_turn_length if there's word timing information
+        #TODO:...
+
+        #Write transcribed turns to a JSON file
+        with open(out_asr_path, 'w') as f:
+            print("Dumping transcribed turns data", out_asr_path)
+            f.write(json.dumps(speaker_turns))
 
         #Write transcribed template to disk
         print("Dumping transcribed template", out_final_otr_path)
@@ -669,7 +717,7 @@ def main():
         print("Dumping transcribed text", out_txt_path)
         speaker_turns_to_txt(speaker_turns, out_txt_path, write_speaker_id)
 
-        print("Dumping SRT", out_srt_path)
+        print("Dumping SRT subtitles (optimized:%s)"%subtimize, out_srt_path)
         speaker_turns_to_srt(speaker_turns, out_srt_path, write_speaker_id)
 
         #Remove temp directory
