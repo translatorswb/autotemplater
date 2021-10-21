@@ -1,5 +1,12 @@
 # autoTemplater
-Create automatically diarized and transcribed oTranscribe templates
+AutoTemplater is a command-line tool to complement speech audio transcription work done with the [oTranscribe tool](https://otranscribe.com/). 
+
+Features: 
+- Speaker diarization with [pyannote](https://github.com/pyannote/pyannote-audio)
+- Diarization revision and re-labeling
+- Automatic speech recognition using [Microsoft Azure speech-to-text](https://docs.microsoft.com/en-us/azure/cognitive-services/speech-service/) or [TWB's ASR-API](https://github.com/translatorswb/ASR-API)
+- Outputs oTranscribe templates (`.otr`) for post-editing
+- Outputs SRT-format subtitles 
 
 ### Installation
 
@@ -43,10 +50,7 @@ Speaker diarization step tends to detect more speakers than usual. A revision st
 ```
 ...
 Dumping raw diarization output ../test_audio/interview-rawdiarization.json
-3 speakers detected
-A: 76 segments
-B: 6 segments
-C: 33 segments
+3 speakers detected, A: 76 segments B: 6 segments C: 33 segments
 Do you want to revise speaker labels? (y for yes) >y<
 Revise speaker samples from path revision/interview
 A
@@ -92,7 +96,7 @@ Using `-s` or `--sid` will insert speaker labels at each turn (off by default):
 00:00:03 (B): hello nice to be here
 ```
 
-Take turn on segment (`-t segment`) is selected by default. A timestamp is inserted everytime a speech segment is detected. For example: 
+Take turn on segment (`-t segment`) is selected by default. A timestamp is inserted for every speech segment seperated with a silence. For example: 
 ```
 00:00:00 (A): hi and welcome back to the history podcast
 00:00:03 (A): this week we got something a little bit different
@@ -101,26 +105,34 @@ Take turn on segment (`-t segment`) is selected by default. A timestamp is inser
 00:00:14 (A): nice to have you
 ```
 
-Take turn on speaker change (`-t speaker`) will put timestamps only when there's a speaker change. For example:
+Take turn on speaker change (`-t speaker`) will put timestamps when there's a speaker change or the turn length is longer than maximum turn length (`maxturnlen`) threshold. For example:
 ```
 00:00:00 (A): hi and welcome back to the history podcast this week we got something a little bit different we have our guest here with us
 00:00:12 (B): hello nice to be here
 00:00:14 (A): nice to have you
 ```
 
+Maximum turn length (`maxturnlen`) is set to 30 seconds by default and can be changed using the `-m` flag. It's only used with speaker-based turns. Example call:
+
+```
+python autotemplater.py -i audio.wav -x api -l en -t speaker -m 15
+```
+
 ### Output files
 
 Main output files are as follows:
 
-- `audio-rawdiarization.otr`: oTranscribe template with timestamps only (and without transcription)
-- `audio-transcript.txt`:  Plain text transcript with timestamps
+- `audio-rawdiarization.otr`: oTranscribe template with timestamps only (no transcription)
 - `audio-autotemplate.otr`: oTranscribe template with timestamps and transcription
+- `audio-transcript.txt`:  Plain text transcript with timestamps
+- `audio-subtitles.srt`: SRT format Subtitles
 
 Other output files for debugging purposes:
 
 - `audio-rawdiarization.json`: Raw diarization output
 - `audio-reviseddiarization.json`: Revised diarization output
 - `audio-spkrevisionmap.json`: Speaker mapping after revision
+- `audio-asr.json`: Transcribed speaker turn data
 
 ### Post-editing on oTranscribe
 

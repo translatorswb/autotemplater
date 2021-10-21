@@ -26,10 +26,9 @@ SPEAKER_DELIMITER = ':'
 SUPPORTED_ASR_SERVICE_TAGS = [ASR_API_FLAG, AZURE_ASR_FLAG]
 
 SAMPLE_COUNT = 5
-REGULAR_MAX_TURN_LENGTH = 30.0 #seconds
-SUBTITLE_MAX_TURN_LENGTH = 4.0
-SEGMENT_AT_PAUSE_LENGTH = 5.0
-SUB_END_BUFFER = 0.5 #seconds
+DEFAULT_MAX_TURN_LENGTH = 30.0 #(seconds) used only with speaker-based turns
+SEGMENT_AT_PAUSE_LENGTH = 3.0 #(seconds) used only with speaker-based turns
+SUB_END_BUFFER = 0.5 #seconds to wait for subtitle entry to pass
 
 USE_AZURE_SDK = True #if false, it'll use requests library (works but sometimes unstable)
 DUMMY_TRANSCRIPTION = False  #Emulates transcription for debugging
@@ -46,7 +45,7 @@ parser.add_argument('-u', '--apiurl', type=str, help='ASR-API URL endpoint (defa
 parser.add_argument('-t', '--turn', type=str, help='Turn on speaker or speech segment (default: segment)', default='segment')
 parser.add_argument('-s', '--sid', action='store_true', help='Write speaker id on turns (default: False)')
 parser.add_argument('-v', '--skiprevision', action='store_true', help='Skip revision query (default: False)')
-parser.add_argument('-b', '--subtimize', action='store_true', help='Optimize parameters for subtitling (default:False)')
+parser.add_argument('-m', '--maxturnlen', type=float, help='Maximum turn length when turns are on speaker changes (default: 30 seconds)', default=DEFAULT_MAX_TURN_LENGTH)
 
 def sec_to_timestamp(sec) -> str:
     """Convert seconds to hh:mm:ss timestamp format"""
@@ -68,7 +67,7 @@ def timestamp_spanner(sec) -> str:
     span_str = '<span class="timestamp" data-timestamp="%s">%s</span>'%(sec, res)
     return span_str
 
-def get_speaker_turns(diarization_output, turn_on_segment, max_turn_length = REGULAR_MAX_TURN_LENGTH, segment_at_pause_length = SEGMENT_AT_PAUSE_LENGTH):
+def get_speaker_turns(diarization_output, turn_on_segment, max_turn_length = DEFAULT_MAX_TURN_LENGTH, segment_at_pause_length = SEGMENT_AT_PAUSE_LENGTH):
     """Makes a minimal speaker turn list from diarization output. Merges segments that belong to same speaker"""
 
     speaker_turns = []
@@ -422,7 +421,7 @@ def main():
     write_speaker_id = args.sid
     asr_api_url_endpoint = args.apiurl
     skip_revision_query = args.skiprevision
-    subtimize = args.subtimize
+    max_turn_length = args.maxturnlen
 
     #Input checks
     if not audio_input:
@@ -451,18 +450,17 @@ def main():
         else:
             print("ERROR: ASR service %s not supported. Select from %s"%(asr_service, SUPPORTED_ASR_SERVICE_TAGS))
             sys.exit()
+
     elif DUMMY_TRANSCRIPTION:
         transcribe_func = dummy_transcriber
 
-    if turn_on == 'speaker':
+    if turn_on == 'segment':
         turn_on_segment = True
-    else:
+    elif turn_on == 'speaker':
         turn_on_segment = False
-    
-    if subtimize:
-        max_turn_length = SUBTITLE_MAX_TURN_LENGTH
     else:
-        max_turn_length = REGULAR_MAX_TURN_LENGTH
+        print("ERROR: Unknown turn flag %s. It needs to be 'segment' or 'speaker'")
+        sys.exit()
 
     #Initialize transcription service
     if asr_service == ASR_API_FLAG:
@@ -525,8 +523,7 @@ def main():
     print("ASR Service:", asr_service)
     print("Output path:", out_path)
     print('Turn on segment:', turn_on_segment)
-    print("Maximum turn length:", max_turn_length)
-    print("Optimize to subtitle:", subtimize)
+    print("Maximum turn length: %f s"%max_turn_length)
     print("Skip diarization revision:", skip_revision_query)
 
     #Output files 
@@ -717,7 +714,7 @@ def main():
         print("Dumping transcribed text", out_txt_path)
         speaker_turns_to_txt(speaker_turns, out_txt_path, write_speaker_id)
 
-        print("Dumping SRT subtitles (optimized:%s)"%subtimize, out_srt_path)
+        print("Dumping SRT subtitles", out_srt_path)
         speaker_turns_to_srt(speaker_turns, out_srt_path, write_speaker_id)
 
         #Remove temp directory
