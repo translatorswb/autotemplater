@@ -519,6 +519,9 @@ def main():
         else:
             os.mkdir(out_path)
 
+    #Determine revision path (TODO: Hardwired for now)
+    revision_path = REVISION_PATH
+
     #Report on setup
     print("ASR Service:", asr_service)
     print("Output path:", out_path)
@@ -596,8 +599,8 @@ def main():
 
     if do_revision:
         #Open directory for revision
-        if not os.path.exists(REVISION_PATH):
-            os.makedirs(REVISION_PATH)
+        if not os.path.exists(revision_path):
+            os.makedirs(revision_path)
 
         #Do revision
         speaker_segments = {}
