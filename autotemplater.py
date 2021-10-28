@@ -30,7 +30,7 @@ DEFAULT_MAX_TURN_LENGTH = 30.0 #(seconds) used only with speaker-based turns
 SEGMENT_AT_PAUSE_LENGTH = 3.0 #(seconds) used only with speaker-based turns
 SUB_END_BUFFER = 0.5 #seconds to wait for subtitle entry to pass
 
-USE_AZURE_SDK = True #if false, it'll use requests library (works but sometimes unstable)
+USE_AZURE_SDK = False #if false, it'll use requests library (works but sometimes unstable)
 DUMMY_TRANSCRIPTION = False  #Emulates transcription for debugging
 
 parser = argparse.ArgumentParser(description="oTranscribe template maker")
@@ -578,6 +578,7 @@ def main():
 
     do_revision = False
     apply_ready_map = False
+    mapped_diarization_dict = diarization_dict
     if not skip_revision_query:
         #Perform speaker label revision (optional)
         perform_revision_input = input("Do you want to revise speaker labels? (y for yes) ")
@@ -676,10 +677,9 @@ def main():
             print("Dumping mapped diarization output", out_mapped_json_path)
             f.write(json.dumps(mapped_diarization_dict))
 
-        #Remove revision path
-        shutil.rmtree(project_revision_path)
-    else:
-        mapped_diarization_dict = diarization_dict
+        if do_revision:
+            #Remove revision path
+            shutil.rmtree(project_revision_path)
 
     #Make empty OTR template
     print("Converting segments to turns")
