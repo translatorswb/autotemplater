@@ -577,6 +577,7 @@ def main():
     print_speakers_data(diarization_dict)
 
     do_revision = False
+    apply_ready_map = False
     if not skip_revision_query:
         #Perform speaker label revision (optional)
         perform_revision_input = input("Do you want to revise speaker labels? (y for yes) ")
@@ -592,7 +593,9 @@ def main():
                 speaker_label_map_dict = json.loads(mapping_dict)
                 print(mapping_dict)
                 use_savedmapping_input = input("Do you want to use it? (y for yes) ")
-                if not use_savedmapping_input == 'y' and not use_savedmapping_input == 'Y':
+                if use_savedmapping_input == 'y' or use_savedmapping_input == 'Y':
+                    apply_ready_map = True
+                else:
                     do_revision = True
             else:
                 do_revision = True
@@ -648,6 +651,8 @@ def main():
             print("Dumping mapping data", out_mapping_path)
             f.write(json.dumps(speaker_label_map_dict))
 
+    if do_revision or apply_ready_map:
+        #From here if reading map from file
         print("Revised speaker labels")
 
         reversed_speaker_label_map_dict = {}
