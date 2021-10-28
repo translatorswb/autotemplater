@@ -30,7 +30,7 @@ DEFAULT_MAX_TURN_LENGTH = 30.0 #(seconds) used only with speaker-based turns
 SEGMENT_AT_PAUSE_LENGTH = 3.0 #(seconds) used only with speaker-based turns
 SUB_END_BUFFER = 0.5 #seconds to wait for subtitle entry to pass
 
-USE_AZURE_SDK = False #if false, it'll use requests library (works but sometimes unstable)
+USE_AZURE_SDK = True #if false, it'll use requests library (works but sometimes unstable)
 DUMMY_TRANSCRIPTION = False  #Emulates transcription for debugging
 
 parser = argparse.ArgumentParser(description="oTranscribe template maker")
