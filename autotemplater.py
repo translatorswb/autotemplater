@@ -19,6 +19,8 @@ API_TRANSCRIBE_URL = "http://127.0.0.1:8010/transcribe"  #default running on loc
 API_TRANSCRIBE_URL_ENDPOINT = "short"
 ASR_API_FLAG = 'api'
 AZURE_ASR_FLAG = 'azure'
+PYANNOTE_DIARIZATION_TAG = 'dia'
+PYANNOTE_SAD_TAG = 'sad'
 DEFAULT_AZURE_REGION = 'westeurope'
 REVISION_PATH = "revision"
 DOWNLOAD_PATH = "download"
@@ -30,7 +32,6 @@ DEFAULT_MAX_TURN_LENGTH = 30.0 #(seconds) used only with speaker-based turns
 SEGMENT_AT_PAUSE_LENGTH = 3.0 #(seconds) used only with speaker-based turns
 SUB_END_BUFFER = 0.5 #seconds to wait for subtitle entry to pass
 
-USE_AZURE_SDK = True #if false, it'll use requests library (works but sometimes unstable)
 DUMMY_TRANSCRIPTION = False  #Emulates transcription for debugging
 
 parser = argparse.ArgumentParser(description="oTranscribe template maker")
@@ -46,6 +47,9 @@ parser.add_argument('-t', '--turn', type=str, help='Turn on speaker or speech se
 parser.add_argument('-s', '--sid', action='store_true', help='Write speaker id on turns (default: False)')
 parser.add_argument('-v', '--skiprevision', action='store_true', help='Skip revision query (default: False)')
 parser.add_argument('-m', '--maxturnlen', type=float, help='Maximum turn length when turns are on speaker changes (default: 30 seconds)', default=DEFAULT_MAX_TURN_LENGTH)
+parser.add_argument('-d', '--diarize', action='store_true', help='Perform speaker diarization (default: False)')
+parser.add_argument('-b', '--bypassazuresdk', action='store_true', help='Bypass Azure SDK if not installed (default: False, WARNING: unreliable)')
+
 
 def sec_to_timestamp(sec) -> str:
     """Convert seconds to hh:mm:ss timestamp format"""
@@ -199,17 +203,42 @@ def print_speakers_data(diarization_dict):
         print("%s: %i segments"%(s, speakers_info[s]), end=' ')
     print()
 
-def do_diarization(wav_path):
-    """Performs pyannote diarization on wav file and outputs its results"""
+def do_pyannote(wav_path, activity):
+    """Performs pyannote diarization or speaker activity detection (SAD) on wav file and outputs its results"""
 
     from pyannote.core import Annotation, Segment
-    from pyannote.audio.features import RawAudio
+    # from pyannote.audio.features import RawAudio
     import torch
 
     file = {'audio': wav_path}
-    pipeline = torch.hub.load('pyannote/pyannote-audio', 'dia')
-    diarization = pipeline(file)
-    diarization_dict = diarization.for_json()
+    pipeline = torch.hub.load('pyannote/pyannote-audio', activity) #TODO device='cpu' or 'gpu' 
+    result = pipeline(file)
+    
+    return result
+
+
+def sad_result_to_diarization_dict(result):
+    """Converts speech activity detection (SAD) results to emulated diarization results (one speaker throughout)"""
+    sign = lambda p : (p[1]-p[0]>0)
+
+    segments = []
+    segment_start = 0.0
+
+    semaphore = sign(result[0])  #this says if it starts with speech or not
+    for i in result:
+        window, probs = i
+        start_s = window.start
+        end_s = window.end
+        new_semaphore = sign(probs)
+        if new_semaphore and not semaphore:
+            segment_start = start_s
+        elif semaphore and not new_semaphore:
+            segment_end = start_s
+            segment = {"segment": {"start": segment_start, "end": segment_end}, "track": "NA", "label": "NA"}
+            segments.append(segment)
+        semaphore = new_semaphore
+
+    diarization_dict = {"pyannote": "Annotation", "content": segments, "modality": "speaker"}
 
     return diarization_dict
 
@@ -422,6 +451,8 @@ def main():
     asr_api_url_endpoint = args.apiurl
     skip_revision_query = args.skiprevision
     max_turn_length = args.maxturnlen
+    diarize = args.diarize
+    bypass_azure_sdk = args.bypassazuresdk
 
     #Input checks
     if not audio_input:
@@ -439,7 +470,7 @@ def main():
                 print("ERROR: Specify service token to use Azure transcription (-a)")
                 sys.exit()
 
-            if USE_AZURE_SDK:
+            if not bypass_azure_sdk:
                 transcribe_func = transcribe_with_azure_sdk
                 initialize_azure_config = initialize_azure_config_sdk
             else:
@@ -524,9 +555,12 @@ def main():
 
     #Report on setup
     print("ASR Service:", asr_service)
+    if asr_service == AZURE_ASR_FLAG:
+        print("Use Azure SDK", not bypass_azure_sdk)
     print("Output path:", out_path)
     print('Turn on segment:', turn_on_segment)
     print("Maximum turn length: %f s"%max_turn_length)
+    print("Speaker diarization:", diarize)
     print("Skip diarization revision:", skip_revision_query)
 
     #Output files 
@@ -565,8 +599,14 @@ def main():
             
         diarization_dict = json.loads(diarization_dict_data)
     else:
-        print("Performing diarization")
-        diarization_dict = do_diarization(wav_path)
+        if diarize:
+            print("Performing diarization")
+            diarization_result = do_pyannote(wav_path, PYANNOTE_DIARIZATION_TAG)
+            diarization_dict = diarization_result.for_json()
+        else:
+            print("Performing speech activity detection")
+            sad_result = do_pyannote(wav_path, PYANNOTE_SAD_TAG)
+            diarization_dict = sad_result_to_diarization_dict(sad_result)
 
         #Write intermediate JSON to file
         with open(out_json_path, 'w') as f:
@@ -579,7 +619,7 @@ def main():
     do_revision = False
     apply_ready_map = False
     mapped_diarization_dict = diarization_dict
-    if not skip_revision_query:
+    if diarize and not skip_revision_query:
         #Perform speaker label revision (optional)
         perform_revision_input = input("Do you want to revise speaker labels? (y for yes) ")
         speaker_label_map_dict = {}
