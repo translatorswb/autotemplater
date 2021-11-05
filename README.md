@@ -22,6 +22,8 @@ cd autotemplater
 pip install -r requirements.txt
 ```
 
+Note: If you want to use Azure without Azure SDK, you can remove the last line in the `requirements.txt` file. 
+
 ### Usage
 
 Only speech activity detection, outputs an empty template with speech segments marked
@@ -47,6 +49,11 @@ python autotemplater.py -i audio.wav -x api -l en -u <remote-asr-api-endpoint>
 Transcribe with Azure speech SDK
 ```
 python autotemplater.py -i audio.wav -x azure -l en-US -a <azure-subscription-key> -r <azure-region>
+```
+
+Transcribe with Azure using REST API
+```
+python autotemplater.py -i audio.wav -x azure -l en-US -a <azure-subscription-key> -r <azure-region> -b
 ```
 
 Using an output path other than the audio directory
