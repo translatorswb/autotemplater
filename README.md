@@ -2,11 +2,17 @@
 AutoTemplater is a command-line tool to complement speech audio transcription work done with the [oTranscribe tool](https://otranscribe.com/). 
 
 Features: 
-- Speaker diarization with [pyannote](https://github.com/pyannote/pyannote-audio)
+- Speaker diarization or speech activity detection with [pyannote](https://github.com/pyannote/pyannote-audio)
 - Diarization revision and re-labeling
 - Automatic speech recognition using [Microsoft Azure speech-to-text](https://docs.microsoft.com/en-us/azure/cognitive-services/speech-service/) or [TWB's ASR-API](https://github.com/translatorswb/ASR-API)
 - Outputs oTranscribe templates (`.otr`) for post-editing
 - Outputs SRT-format subtitles 
+
+### Post-editing on oTranscribe
+
+This tool outputs templates to be used in [otranscribe.com](https://otranscribe.com/). This is because Automatic speech recognition (ASR) makes errors, and they usually need to be post-edited to get accurate transcriptions. To do this, go to [otranscribe.com](https://otranscribe.com/), load your audio file and then import your template file (`.otr`) from the right hand menu. You can then easily post-edit while listening to your audio. 
+
+![Template post-editing on oTranscribe](img/otranscribe_editing.png)
 
 ### Installation
 
@@ -18,17 +24,22 @@ pip install -r requirements.txt
 
 ### Usage
 
-Only diarization
+Only speech activity detection, outputs an empty template with speech segments marked
 ```
 python autotemplater.py -i audio.wav 
 ```
 
-Transcribe with locally running [ASR-API](https://github.com/translatorswb/ASR-API)
+Only diarization, outputs an empty template with speech segments marked with their speaker labels
+```
+python autotemplater.py -i audio.wav -d
+```
+
+Transcribe with a locally running [ASR-API](https://github.com/translatorswb/ASR-API), takes default running location `http://127.0.0.1:8010/transcribe`
 ```
 python autotemplater.py -i audio.wav -x api -l en
 ```
 
-Transcribe with remotely running [ASR-API](https://github.com/translatorswb/ASR-API)
+Transcribe with a remotely running [ASR-API](https://github.com/translatorswb/ASR-API)
 ```
 python autotemplater.py -i audio.wav -x api -l en -u <remote-asr-api-endpoint>
 ```
@@ -45,7 +56,7 @@ python autotemplater.py -i audio.wav -o <output-directory-path>
 
 ### Speaker diarization revision
 
-Speaker diarization step tends to detect more speakers than usual. A revision step is necessary to correct the automatically assigned labels. Once diarization is finished, you'll be asked to listen to sample segments placed in the project directory and place the correct speaker labels on each of them. Example:
+Speaker diarization step tends to detect more speakers than there is. A revision step is necessary to correct the automatically assigned labels. Once diarization is finished, you'll be asked to listen to sample segments placed in the project directory and place the correct speaker labels on each of them. Example:
 
 ```
 ...
@@ -75,9 +86,9 @@ revision/interview/C/114.21-120.58.wav
 revision/interview/C/325.19-327.73.wav
 
 Please specify names for each label
-A is... >Respondent<
-B is... >Interviewer<
-C is... >Respondent<
+A is... >Input here the name of speaker A e.g. Respondent<
+B is... >Input here the name of speaker B e.g. Interviewer<
+C is... >Input here the name of speaker C e.g. Interviewer<
 Dumping mapping data ../test_audio/interview-spkrevisionmap.txt
 Revised speaker labels
 {'Interviewer': ['B'], 'Respondent': ['A', 'C']}
@@ -86,9 +97,9 @@ Dumping diarized template ../test_audio/interview-diarization.otr
 ...
 ```
 
-To skip this step, use the `-v` or `--skiprevision` flag.
+To skip this step, use the `-v` or `--skiprevision` flag and they'll keep the names assigned automatically (A,B,C etc.)
 
-### Template options
+### Formatting options
 
 Using `-s` or `--sid` will insert speaker labels at each turn (off by default):
 ```
@@ -105,14 +116,14 @@ Take turn on segment (`-t segment`) is selected by default. A timestamp is inser
 00:00:14 (A): nice to have you
 ```
 
-Take turn on speaker change (`-t speaker`) will put timestamps when there's a speaker change or the turn length is longer than maximum turn length (`maxturnlen`) threshold. For example:
+Take turn on speaker change (`-t span`) will merge segments until they reach the specified span length and when there's a speaker change. For example:
 ```
 00:00:00 (A): hi and welcome back to the history podcast this week we got something a little bit different we have our guest here with us
 00:00:12 (B): hello nice to be here
 00:00:14 (A): nice to have you
 ```
 
-Maximum turn length (`maxturnlen`) is set to 30 seconds by default and can be changed using the `-m` flag. It's only used with speaker-based turns. Example call:
+Span length (`spanlength`) is set to 30 seconds by default and can be changed using the `-n` flag. Example call:
 
 ```
 python autotemplater.py -i audio.wav -x api -l en -t speaker -m 15
@@ -125,7 +136,7 @@ Main output files are as follows:
 - `audio-rawdiarization.otr`: oTranscribe template with timestamps only (no transcription)
 - `audio-autotemplate.otr`: oTranscribe template with timestamps and transcription
 - `audio-transcript.txt`:  Plain text transcript with timestamps
-- `audio-subtitles.srt`: SRT format Subtitles
+- `audio-subtitles.srt`: SRT format subtitles
 
 Other output files for debugging purposes:
 
@@ -134,8 +145,4 @@ Other output files for debugging purposes:
 - `audio-spkrevisionmap.json`: Speaker mapping after revision
 - `audio-asr.json`: Transcribed speaker turn data
 
-### Post-editing on oTranscribe
-
-Automatic speech recognition (ASR) makes errors. If you want to do post-editing on the output, go to [otranscribe.com](https://otranscribe.com/), load your audio file and then import your template file (`.otr`). You can then easily post-edit while listening to your audio. 
-
-![Template post-editing on oTranscribe](img/otranscribe_editing.png)
+WARNING: These are also reutilized on consecutive runs of the same audio file. 

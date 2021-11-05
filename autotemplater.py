@@ -15,10 +15,14 @@ import validators
 from pydub import AudioSegment
 from tqdm import tqdm
 
+#Constants
 API_TRANSCRIBE_URL = "http://127.0.0.1:8010/transcribe"  #default running on local
 API_TRANSCRIBE_URL_ENDPOINT = "short"
 ASR_API_FLAG = 'api'
 AZURE_ASR_FLAG = 'azure'
+TURN_ON_SEGMENT_FLAG = 'segment'
+TURN_ON_SPAN_FLAG = 'span'
+TURN_ON_FLAGS = [TURN_ON_SEGMENT_FLAG, TURN_ON_SPAN_FLAG]
 PYANNOTE_DIARIZATION_TAG = 'dia'
 PYANNOTE_SAD_TAG = 'sad'
 DEFAULT_AZURE_REGION = 'westeurope'
@@ -27,9 +31,10 @@ DOWNLOAD_PATH = "download"
 SPEAKER_DELIMITER = ':'
 SUPPORTED_ASR_SERVICE_TAGS = [ASR_API_FLAG, AZURE_ASR_FLAG]
 
+
 SAMPLE_COUNT = 5
-DEFAULT_MAX_TURN_LENGTH = 30.0 #(seconds) used only with speaker-based turns
-SEGMENT_AT_PAUSE_LENGTH = 3.0 #(seconds) used only with speaker-based turns
+DEFAULT_MAX_TURN_LENGTH = 30.0 #(seconds) used only with span-based turns
+SEGMENT_AT_PAUSE_LENGTH = 3.0 #(seconds) used only with span-based turns
 SUB_END_BUFFER = 0.5 #seconds to wait for subtitle entry to pass
 
 DUMMY_TRANSCRIPTION = False  #Emulates transcription for debugging
@@ -43,13 +48,12 @@ parser.add_argument('-a', '--azuretoken', type=str, help='Azure token if sending
 parser.add_argument('-r', '--azureregion', type=str, help='Azure region if sending to Azure ASR (default: %s)'%DEFAULT_AZURE_REGION, default=DEFAULT_AZURE_REGION)
 parser.add_argument('-x', '--transcribe', type=str, help='Automatic transcription service %s'%(SUPPORTED_ASR_SERVICE_TAGS))
 parser.add_argument('-u', '--apiurl', type=str, help='ASR-API URL endpoint (default: http://127.0.0.1:8010/transcribe/short)', default=API_TRANSCRIBE_URL)
-parser.add_argument('-t', '--turn', type=str, help='Turn on speaker or speech segment (default: segment)', default='segment')
+parser.add_argument('-t', '--turn', type=str, help='Turn on segment or span (default: segment)', default=TURN_ON_SEGMENT_FLAG)
 parser.add_argument('-s', '--sid', action='store_true', help='Write speaker id on turns (default: False)')
-parser.add_argument('-v', '--skiprevision', action='store_true', help='Skip revision query (default: False)')
-parser.add_argument('-m', '--maxturnlen', type=float, help='Maximum turn length when turns are on speaker changes (default: 30 seconds)', default=DEFAULT_MAX_TURN_LENGTH)
+parser.add_argument('-v', '--skiprevision', action='store_true', help='Skip diarization revision query (default: False)')
+parser.add_argument('-n', '--spanlength', type=float, help='Maximum span length in seconds (default: 30 seconds)', default=DEFAULT_MAX_TURN_LENGTH)
 parser.add_argument('-d', '--diarize', action='store_true', help='Perform speaker diarization (default: False)')
-parser.add_argument('-b', '--bypassazuresdk', action='store_true', help='Bypass Azure SDK if not installed (default: False, WARNING: unreliable)')
-
+parser.add_argument('-b', '--bypassazuresdk', action='store_true', help='Bypass Azure SDK and use (unreliable) requests (default: False)')
 
 def sec_to_timestamp(sec) -> str:
     """Convert seconds to hh:mm:ss timestamp format"""
@@ -450,7 +454,7 @@ def main():
     write_speaker_id = args.sid
     asr_api_url_endpoint = args.apiurl
     skip_revision_query = args.skiprevision
-    max_turn_length = args.maxturnlen
+    max_turn_length = args.spanlength
     diarize = args.diarize
     bypass_azure_sdk = args.bypassazuresdk
 
@@ -485,12 +489,12 @@ def main():
     elif DUMMY_TRANSCRIPTION:
         transcribe_func = dummy_transcriber
 
-    if turn_on == 'segment':
+    if turn_on == TURN_ON_SEGMENT_FLAG:
         turn_on_segment = True
-    elif turn_on == 'speaker':
+    elif turn_on == TURN_ON_SPAN_FLAG:
         turn_on_segment = False
     else:
-        print("ERROR: Unknown turn flag %s. It needs to be 'segment' or 'speaker'")
+        print("ERROR: Unknown turn flag %s. It needs to be %s"%(turn_on,' or '.join(TURN_ON_FLAGS)))
         sys.exit()
 
     #Initialize transcription service
