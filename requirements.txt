@@ -2,3 +2,4 @@ pydub
 requests
 pyannote.audio
 azure-cognitiveservices-speech
+validators
