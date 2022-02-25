@@ -192,7 +192,7 @@ def segment_turns(turns, max_chars=MAX_CHARS_PER_SUBSEG, translator_func=None, d
             if debug: print(sentturn['puncdtext'])
             
             if translator_func:
-                translated = translator_func(turntext)
+                translated = translator_func(puncdtext)
 
                 sentturn['translated'] = translated
                 if debug: print(sentturn['translated'])
@@ -202,5 +202,5 @@ def segment_turns(turns, max_chars=MAX_CHARS_PER_SUBSEG, translator_func=None, d
             sentturns.extend(split_long_turn(sentturn, 'puncdtext', max_chars))
                 
             prevsentendindex = sentendindex+1
-            print()
+            if debug: print()
     return sentturns, sentturns_translated
