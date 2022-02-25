@@ -264,7 +264,7 @@ def transcribe_with_azure_sdk(audio_path, speech_config):
     result = speech_recognizer.recognize_once_async().get()
     response_json = json.loads(result.json)
 
-    if response_json['RecognitionStatus'] == "Sucess":
+    if response_json['RecognitionStatus'] == "Success":
         raw_transcript = response_json['NBest'][0]['ITN']
         punctuated_transcript = response_json['NBest'][0]['Display']
         word_timing = response_json["NBest"][0]['Words']
