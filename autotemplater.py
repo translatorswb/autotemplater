@@ -263,13 +263,14 @@ def transcribe_with_azure_sdk(audio_path, speech_config):
 
     result = speech_recognizer.recognize_once_async().get()
 
-    response_json = json.loads(result.json) 
-
     try:
+        response_json = json.loads(result.json) 
         raw_transcript = response_json['NBest'][0]['ITN']
         punctuated_transcript = response_json['NBest'][0]['Display']
         word_timing = response_json["NBest"][0]['Words']
-    except:
+    except Exception as e:
+        print("Exception during Azure SDK speech-to-text call for", audio_path)
+        print(e)
         raw_transcript = ''
         punctuated_transcript = ''
         word_timing = []
