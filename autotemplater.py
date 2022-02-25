@@ -15,7 +15,7 @@ import httpx
 import validators
 from pydub import AudioSegment
 from tqdm import tqdm
-from subtools import segment_turns, speaker_turns_to_srt
+from subtools import segment_turns, speaker_turns_to_srt, get_azure_translator
 
 #Constants
 API_TRANSCRIBE_URL = "http://127.0.0.1:8010/transcribe"  #default running on local
@@ -48,10 +48,11 @@ parser.add_argument('-i', '--audio', type=str, required=True, help='Input audio 
 parser.add_argument('-l', '--lang', type=str, help='Transcription language')
 parser.add_argument('-o', '--out', type=str, help='Output directory (default: input audio directory)')
 parser.add_argument('-p', '--punctoken', type=str, help='PunkProse token if sending to remote API (Not implemented)') #TODO
-parser.add_argument('-a', '--azuretoken', type=str, help='Azure token if sending to Azure ASR')
+parser.add_argument('-a', '--azureasrtoken', type=str, help='Azure token if sending to Azure ASR')
+parser.add_argument('-m', '--azuretranslatetoken', type=str, help='Azure token if sending to Azure ASR')
 parser.add_argument('-r', '--azureregion', type=str, help='Azure region if sending to Azure ASR (default: %s)'%DEFAULT_AZURE_REGION, default=DEFAULT_AZURE_REGION)
 parser.add_argument('-x', '--transcribe', type=str, help='Automatic transcription service %s'%(SUPPORTED_ASR_SERVICE_TAGS))
-parser.add_argument('-e', '--translate', type=str, help='Translate to language', default=None)
+parser.add_argument('-f', '--translate', type=str, help='Translate to language', default=None)
 parser.add_argument('-u', '--apiurl', type=str, help='ASR-API URL endpoint (default: http://127.0.0.1:8010/transcribe/short)', default=API_TRANSCRIBE_URL)
 parser.add_argument('-t', '--turn', type=str, help='Turn on segment(default) or span (WARNING: Dont use span with Azure)', default=TURN_ON_SEGMENT_FLAG)
 parser.add_argument('-s', '--sid', action='store_true', help='Write speaker id on turns (default: False)')
@@ -412,7 +413,8 @@ def main():
     out_path = args.out
     lang = args.lang
     translate_lang = args.translate
-    azure_token = args.azuretoken
+    azure_asr_token = args.azureasrtoken
+    azure_translate_token = args.azuretranslatetoken
     azure_region = args.azureregion
     asr_service = args.transcribe
     punctoken = args.punctoken
@@ -436,7 +438,7 @@ def main():
     #Determine ASR procedure to use
     if asr_service:
         if asr_service==AZURE_ASR_FLAG:
-            if asr_service==AZURE_ASR_FLAG and not azure_token:
+            if asr_service==AZURE_ASR_FLAG and not azure_asr_token:
                 print("ERROR: Specify service token to use Azure transcription (-a)")
                 sys.exit()
 
@@ -470,7 +472,7 @@ def main():
             print("Couldn't initialize ASR API. Exiting.")
             sys.exit()
     elif asr_service == AZURE_ASR_FLAG:
-        speech_config = initialize_azure_config(azure_token, lang, azure_region)
+        speech_config = initialize_azure_config(azure_asr_token, lang, azure_region)
         if not speech_config:
             print("Couldn't initialize Azure ASR. Exiting.")
             sys.exit()
@@ -545,7 +547,7 @@ def main():
     out_asr_path = os.path.join(out_path, audio_id + '-asr.json') 
     if translate_lang:
         out_translated_srt_path = os.path.join(out_path ,audio_id + '-subtitles_' + translate_lang + '.srt')
-        
+
     #Ensure wav format input
     wav_path = audio_convert(audio_path)
 
@@ -702,36 +704,40 @@ def main():
     #Write empty template to disk
     print("Dumping diarized template", out_empty_otr_path)
     speaker_turns_to_otr(speaker_turns, out_empty_otr_path, write_speaker_id)
+    got_transcription = False
+    if asr_service and not os.path.exists(out_asr_path):
+        
+        #Create temp directory to store audio chunks
+        tmp_dir_path = tempfile.mkdtemp()
+        print("Temp dir:", tmp_dir_path) #DEBUG
+        
+        #Transcribe speaker turns
+        for t in tqdm(speaker_turns, desc="Transcribing segments"):
+            t['rawtext'], t['puncdtext'], t['wordtiming'] = get_transcription_of_chunk(complete_audio, t['start'], t['end'], tmp_dir_path, transcribe_func, speech_config)
+            print("%.2f-%.2f (%s): %s"%(t['start'], t['end'], t['speaker'], t['puncdtext']))
 
-    if asr_service:
-        if not os.path.exists(out_asr_path):
-            #Create temp directory to store audio chunks
-            tmp_dir_path = tempfile.mkdtemp()
-            print("Temp dir:", tmp_dir_path) #DEBUG
-            
-            #Transcribe speaker turns
-            for t in tqdm(speaker_turns, desc="Transcribing segments"):
-                t['rawtext'], t['puncdtext'], t['wordtiming'] = get_transcription_of_chunk(complete_audio, t['start'], t['end'], tmp_dir_path, transcribe_func, speech_config)
-                print("%.2f-%.2f (%s): %s"%(t['start'], t['end'], t['speaker'], t['puncdtext']))
+        #DEBUG
+        #print("----")
+        #for s in speaker_turns:
+        #    print(s)
+        #print("----")
 
-            #DEBUG
-            #print("----")
-            #for s in speaker_turns:
-            #    print(s)
-            #print("----")
+        #Write transcribed turns to a JSON file
+        with open(out_asr_path, 'w') as f:
+            print("Dumping transcribed turns data", out_asr_path)
+            f.write(json.dumps(speaker_turns))
 
-            #Write transcribed turns to a JSON file
-            with open(out_asr_path, 'w') as f:
-                print("Dumping transcribed turns data", out_asr_path)
-                f.write(json.dumps(speaker_turns))
+        #Remove temp directory
+        shutil.rmtree(tmp_dir_path)
+        got_transcription = True
+    elif os.path.exists(out_asr_path):
+        print("Reading transcribed JSON", out_asr_path)
+        with open(out_asr_path) as f:
+            speaker_turns = json.load(f)
+        got_transcription = True
 
-            #Remove temp directory
-            shutil.rmtree(tmp_dir_path)
-        else:
-            print("Reading transcribed JSON", out_asr_path)
-            with open(out_asr_path) as f:
-                speaker_turns = json.load(f)
 
+    if got_transcription:
         #Write transcribed template to disk
         print("Dumping transcribed template", out_final_otr_path)
         speaker_turns_to_otr(speaker_turns, out_final_otr_path, write_speaker_id)
@@ -739,12 +745,18 @@ def main():
         print("Dumping transcribed text", out_txt_path)
         speaker_turns_to_txt(speaker_turns, out_txt_path, write_speaker_id)
 
+        if translate_lang:
+            translator = get_azure_translator(lang, translate_lang, azure_translate_token)
+        else:
+            translator = None
+
+        sentence_turns, sentence_turns_translated = segment_turns(speaker_turns, translator_func=translator)
+
         print("Dumping SRT subtitles", out_srt_path)
-        sentence_turns, sentence_turns_translated = segment_turns(speaker_turns, src=lang, trg=translate_lang)
         speaker_turns_to_srt(sentence_turns, out_srt_path, txttag='puncdtext')
 
         if translate_lang:
-            print("Dumping translated SRT subtitles", out_translated_srt_path)
+            print("Dumping translated SRT subtitles in %s"%translate_lang, out_srt_path)
             speaker_turns_to_srt(sentence_turns_translated, out_translated_srt_path, txttag='translated')
 
 

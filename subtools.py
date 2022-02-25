@@ -41,7 +41,12 @@ def get_azure_translator(src, trg, subscription_key, endpoint = "https://api.cog
     def translate(string):
         request = requests.post(constructed_url, params=params, headers=headers, json=[{'text': string}])
         response = request.json()
-        return response[0]['translations'][0]['text']
+        if request.status_code == 200:
+            return response[0]['translations'][0]['text']
+        else:
+            print("Cannot establish connection to translator")
+            print(response)
+            return '~'+string+'~'
 
     return lambda x: translate(x)
 
@@ -117,16 +122,16 @@ def optimal_split_text(text, max_char):
         split_segments.append(current_segment)
     return split_segments
 
-def split_long_turn(turn, texttag, max_chars=MAX_CHARS_PER_SUBSEG):
+def split_long_turn(turn, texttag, max_chars=MAX_CHARS_PER_SUBSEG, debug=False):
     newturns = []
-    print("split_long_turn:", texttag, turn[texttag])
+    if debug: print("split_long_turn:", texttag, turn[texttag])
     text_segments = optimal_split_text(turn[texttag], max_chars)
-    print("split_long_turn:text_segments", text_segments)
+    if debug: print("split_long_turn:text_segments", text_segments)
     fullcharlen=len(turn[texttag])
     start = turn['start']
     at_token = 0
     for seg in text_segments:
-        print(">>", seg)
+        if debug: print(">>", seg)
         no_tokens = len(seg.split())
         segcharlen = len(seg)
         duration = turn['end'] - turn['start']
@@ -145,7 +150,7 @@ def split_long_turn(turn, texttag, max_chars=MAX_CHARS_PER_SUBSEG):
         
         splitturn[texttag] = seg
         
-        print(">>", splitturn['start'], splitturn['end'])
+        if debug: print(">>", splitturn['start'], splitturn['end'])
 
         start = end
         at_token = end_token
@@ -153,22 +158,23 @@ def split_long_turn(turn, texttag, max_chars=MAX_CHARS_PER_SUBSEG):
         newturns.append(splitturn)
     return newturns
 
-def segment_turns(turns, max_chars=MAX_CHARS_PER_SUBSEG, src=None, trg=None):
+def segment_turns(turns, max_chars=MAX_CHARS_PER_SUBSEG, translator_func=None, debug=False):
     sentturns = []
     sentturns_translated = []
     for turn in turns:
         turnstart = turn['start']
-        print(">>>", turnstart)
-        print(turn)
-        print(turn['puncdtext'])
+        if debug: print(">>>", turnstart)
+        if debug: print(turn)
+        if debug: print(turn['puncdtext'])
+
         turntext = turn['puncdtext'] if turn['puncdtext'] else turn['rawtext']
 
-        sentends = get_sentend_pos(turn['puncdtext'])
-        print(sentends)
+        sentends = get_sentend_pos(turntext)
+        if debug: print(sentends)
         prevsentendindex = 0
         for sentendindex in sentends:
-            print("from", prevsentendindex, "to", sentendindex)
-            puncdtext = ' '.join(turn['puncdtext'].split()[prevsentendindex:sentendindex+1])
+            if debug: print("from", prevsentendindex, "to", sentendindex)
+            turntext = ' '.join(turntext.split()[prevsentendindex:sentendindex+1])
             rawtext = ' '.join(turn['rawtext'].split()[prevsentendindex:sentendindex+1])
             
             sentstart = turnstart + turn['wordtiming'][prevsentendindex]['Offset']/10000000
@@ -183,28 +189,22 @@ def segment_turns(turns, max_chars=MAX_CHARS_PER_SUBSEG, src=None, trg=None):
                  'speaker': turn['speaker'], 
                  'toolong':None, 
                  'rawtext': rawtext, 
-                 'puncdtext': puncdtext,
+                 'puncdtext': turntext,
                  'wordtiming': wordtiming } 
             
-            print(sentturn['start'], sentturn['end'])
-            print(sentturn['puncdtext'])
-#             print(sentturn['wordtiming'])
+            if debug: print(sentturn['start'], sentturn['end'])
+            if debug: print(sentturn['puncdtext'])
             
-            if trg:
-                try:
-                    #translated = translator.translate(puncdtext, src=src, dest=trg).text
-                    translated = azure_translator(puncdtext, src=src, trg=trg)
-                except Exception as e:
-                    print("ERROR: Couldn't translate sentence", puncdtext)
-                    print(e)
-                    translated = "~" + puncdtext + "~"
-                sentturn['translated'] = translated
-                print(sentturn['translated'])
+            if translator_func:
+                translated = translator_func(turntext)
 
-                sentturns_translated.extend(split_long_turn(sentturn, 'translated', max_chars))
+                sentturn['translated'] = translated
+                if debug: print(sentturn['translated'])
+
+                sentturns_translated.extend(split_long_turn(sentturn, 'translated', max_chars, debug))
                 
-            sentturns.extend(split_long_turn(sentturn, 'puncdtext', max_chars))
+            sentturns.extend(split_long_turn(sentturn, 'puncdtext', max_chars, debug))
                 
             prevsentendindex = sentendindex+1
-            print()
+            if debug: print()
     return sentturns, sentturns_translated
