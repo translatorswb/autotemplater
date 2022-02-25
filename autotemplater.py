@@ -756,7 +756,7 @@ def main():
         speaker_turns_to_srt(sentence_turns, out_srt_path, txttag='puncdtext')
 
         if translate_lang:
-            print("Dumping translated SRT subtitles in %s"%translate_lang, out_srt_path)
+            print("Dumping translated SRT subtitles in %s"%translate_lang, out_translated_srt_path)
             speaker_turns_to_srt(sentence_turns_translated, out_translated_srt_path, txttag='translated')
 
 
