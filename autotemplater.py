@@ -11,13 +11,16 @@ import tempfile
 import shutil
 import random
 import requests
+import httpx
 import validators
 from pydub import AudioSegment
 from tqdm import tqdm
+from subtools import segment_turns, speaker_turns_to_srt
 
 #Constants
 API_TRANSCRIBE_URL = "http://127.0.0.1:8010/transcribe"  #default running on local
 API_TRANSCRIBE_URL_ENDPOINT = "short"
+API_PUNKPROSE_URL = "http://api.collectivat.cat/punkProse"
 ASR_API_FLAG = 'api'
 AZURE_ASR_FLAG = 'azure'
 TURN_ON_SEGMENT_FLAG = 'segment'
@@ -35,7 +38,8 @@ SUPPORTED_ASR_SERVICE_TAGS = [ASR_API_FLAG, AZURE_ASR_FLAG]
 SAMPLE_COUNT = 5
 DEFAULT_MAX_TURN_LENGTH = 30.0 #(seconds) used only with span-based turns
 SEGMENT_AT_PAUSE_LENGTH = 3.0 #(seconds) used only with span-based turns
-SUB_END_BUFFER = 0.5 #seconds to wait for subtitle entry to pass
+MAX_CHARS_PER_SUBSEG = 80
+# SUB_END_BUFFER = 0.5 #seconds to wait for subtitle entry to pass
 
 DUMMY_TRANSCRIPTION = False  #Emulates transcription for debugging
 
@@ -47,25 +51,21 @@ parser.add_argument('-p', '--punctoken', type=str, help='PunkProse token if send
 parser.add_argument('-a', '--azuretoken', type=str, help='Azure token if sending to Azure ASR')
 parser.add_argument('-r', '--azureregion', type=str, help='Azure region if sending to Azure ASR (default: %s)'%DEFAULT_AZURE_REGION, default=DEFAULT_AZURE_REGION)
 parser.add_argument('-x', '--transcribe', type=str, help='Automatic transcription service %s'%(SUPPORTED_ASR_SERVICE_TAGS))
+parser.add_argument('-e', '--translate', type=str, help='Translate to language', default=None)
 parser.add_argument('-u', '--apiurl', type=str, help='ASR-API URL endpoint (default: http://127.0.0.1:8010/transcribe/short)', default=API_TRANSCRIBE_URL)
-parser.add_argument('-t', '--turn', type=str, help='Turn on segment or span (default: segment)', default=TURN_ON_SEGMENT_FLAG)
+parser.add_argument('-t', '--turn', type=str, help='Turn on segment(default) or span (WARNING: Dont use span with Azure)', default=TURN_ON_SEGMENT_FLAG)
 parser.add_argument('-s', '--sid', action='store_true', help='Write speaker id on turns (default: False)')
 parser.add_argument('-v', '--skiprevision', action='store_true', help='Skip diarization revision query (default: False)')
 parser.add_argument('-n', '--spanlength', type=float, help='Maximum span length in seconds (default: 30 seconds)', default=DEFAULT_MAX_TURN_LENGTH)
 parser.add_argument('-d', '--diarize', action='store_true', help='Perform speaker diarization (default: False)')
 parser.add_argument('-b', '--bypassazuresdk', action='store_true', help='Bypass Azure SDK and use (unreliable) requests (default: False)')
 
+
+
 def sec_to_timestamp(sec) -> str:
     """Convert seconds to hh:mm:ss timestamp format"""
     ty_res = time.gmtime(sec)
     res = time.strftime("%H:%M:%S",ty_res)
-    return res
-
-def sec_to_srt_timestamp(sec) -> str:
-    """Convert seconds to hh:mm:ss timestamp format"""
-    ty_res = time.gmtime(sec)
-    time_in_ms = sec * 1000
-    res = time.strftime("%H:%M:%S", ty_res) + ",%03.0f"%(time_in_ms%1000)
     return res
 
 def timestamp_spanner(sec) -> str:
@@ -111,8 +111,6 @@ def get_speaker_turns(diarization_output, turn_on_segment, max_turn_length = DEF
             current_turn['toolong'] = True
             
     return speaker_turns
-
-
 
 def speaker_turns_to_otr(speaker_turns, output_path, write_speaker_id=False):
     """Creates an OTR template from speaker turn list"""
@@ -160,39 +158,6 @@ def speaker_turns_to_txt(speaker_turns, output_path, write_speaker_id=False):
     with open(output_path, 'w') as f:
         f.write(out_text)
 
-def speaker_turns_to_srt(speaker_turns, output_path, write_speaker_id=False):
-    """Creates an SRT subtitle from speaker turn list"""
-
-    out_text = ""
-    for i, t in enumerate(speaker_turns):
-        if 'rawtext' in t:
-            if not t['rawtext']:
-                continue 
-            
-        #subtitles can stay on the screen longer than the actual end timestamp
-        next_t = None
-        if i+1 < len(speaker_turns):
-            next_t = speaker_turns[i+1]
-
-        if next_t and t['end'] + SUB_END_BUFFER < next_t['start']:
-            end_timestamp = t['end'] + SUB_END_BUFFER
-        elif next_t:
-            end_timestamp = next_t['start']
-        else:
-            end_timestamp = t['end'] + SUB_END_BUFFER
-
-        out_text += str(i) + '\n'
-        out_text += sec_to_srt_timestamp(t['start']) + ' --> ' + sec_to_srt_timestamp(end_timestamp) + '\n'
-        
-        if write_speaker_id:# and 'speaker' in t:
-            out_text += '(' + t['speaker'] + ')' + SPEAKER_DELIMITER + " "
-        if 'rawtext' in t:
-            out_text += t['rawtext']
-        out_text += '\n\n'
-            
-    with open(output_path, 'w') as f:
-        f.write(out_text)
-
 def print_speakers_data(diarization_dict):
     """Prints number of speakers and number of segments for each of them on the screen"""
 
@@ -219,7 +184,6 @@ def do_pyannote(wav_path, activity):
     result = pipeline(file)
     
     return result
-
 
 def sad_result_to_diarization_dict(result):
     """Converts speech activity detection (SAD) results to emulated diarization results (one speaker throughout)"""
@@ -447,9 +411,11 @@ def main():
     audio_input = args.audio
     out_path = args.out
     lang = args.lang
+    translate_lang = args.translate
     azure_token = args.azuretoken
     azure_region = args.azureregion
     asr_service = args.transcribe
+    punctoken = args.punctoken
     turn_on = args.turn
     write_speaker_id = args.sid
     asr_api_url_endpoint = args.apiurl
@@ -577,7 +543,9 @@ def main():
     out_mapped_json_path = os.path.join(out_path ,audio_id + '-reviseddiarization.json')
     out_mapping_path = os.path.join(out_path ,audio_id + '-spkrevisionmap.json')
     out_asr_path = os.path.join(out_path, audio_id + '-asr.json') 
-
+    if translate_lang:
+        out_translated_srt_path = os.path.join(out_path ,audio_id + '-subtitles_' + translate_lang + '.srt')
+        
     #Ensure wav format input
     wav_path = audio_convert(audio_path)
 
@@ -736,28 +704,33 @@ def main():
     speaker_turns_to_otr(speaker_turns, out_empty_otr_path, write_speaker_id)
 
     if asr_service:
-        #Create temp directory to store audio chunks
-        tmp_dir_path = tempfile.mkdtemp()
-        print("Temp dir:", tmp_dir_path) #DEBUG
-        
-        #Transcribe speaker turns
-        for t in tqdm(speaker_turns, desc="Transcribing segments"):
-            t['rawtext'], t['puncdtext'], t['wordtiming'] = get_transcription_of_chunk(complete_audio, t['start'], t['end'], tmp_dir_path, transcribe_func, speech_config)
-            # print("%.2f-%.2f (%s): %s"%(t['start'], t['end'], t['speaker'], t['text']))
+        if not os.path.exists(out_asr_path):
+            #Create temp directory to store audio chunks
+            tmp_dir_path = tempfile.mkdtemp()
+            print("Temp dir:", tmp_dir_path) #DEBUG
+            
+            #Transcribe speaker turns
+            for t in tqdm(speaker_turns, desc="Transcribing segments"):
+                t['rawtext'], t['puncdtext'], t['wordtiming'] = get_transcription_of_chunk(complete_audio, t['start'], t['end'], tmp_dir_path, transcribe_func, speech_config)
+                print("%.2f-%.2f (%s): %s"%(t['start'], t['end'], t['speaker'], t['puncdtext']))
 
-        #DEBUG
-        #print("----")
-        #for s in speaker_turns:
-        #    print(s)
-        #print("----")
+            #DEBUG
+            #print("----")
+            #for s in speaker_turns:
+            #    print(s)
+            #print("----")
 
-        #Force max_turn_length if there's word timing information
-        #TODO:...
+            #Write transcribed turns to a JSON file
+            with open(out_asr_path, 'w') as f:
+                print("Dumping transcribed turns data", out_asr_path)
+                f.write(json.dumps(speaker_turns))
 
-        #Write transcribed turns to a JSON file
-        with open(out_asr_path, 'w') as f:
-            print("Dumping transcribed turns data", out_asr_path)
-            f.write(json.dumps(speaker_turns))
+            #Remove temp directory
+            shutil.rmtree(tmp_dir_path)
+        else:
+            print("Reading transcribed JSON", out_asr_path)
+            with open(out_asr_path) as f:
+                speaker_turns = json.load(f)
 
         #Write transcribed template to disk
         print("Dumping transcribed template", out_final_otr_path)
@@ -767,10 +740,13 @@ def main():
         speaker_turns_to_txt(speaker_turns, out_txt_path, write_speaker_id)
 
         print("Dumping SRT subtitles", out_srt_path)
-        speaker_turns_to_srt(speaker_turns, out_srt_path, write_speaker_id)
+        sentence_turns, sentence_turns_translated = segment_turns(speaker_turns, src=lang, trg=translate_lang)
+        speaker_turns_to_srt(sentence_turns, out_srt_path, txttag='puncdtext')
 
-        #Remove temp directory
-        shutil.rmtree(tmp_dir_path) #DEBUG
+        if translate_lang:
+            print("Dumping translated SRT subtitles", out_translated_srt_path)
+            speaker_turns_to_srt(sentence_turns_translated, out_translated_srt_path, txttag='translated')
+
 
 if __name__ == "__main__":
     main()
