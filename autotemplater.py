@@ -714,7 +714,7 @@ def main():
         #Transcribe speaker turns
         for t in tqdm(speaker_turns, desc="Transcribing segments"):
             t['rawtext'], t['puncdtext'], t['wordtiming'] = get_transcription_of_chunk(complete_audio, t['start'], t['end'], tmp_dir_path, transcribe_func, speech_config)
-            print("%.2f-%.2f (%s): %s"%(t['start'], t['end'], t['speaker'], t['puncdtext']))
+            #print("%.2f-%.2f (%s): %s"%(t['start'], t['end'], t['speaker'], t['puncdtext']))
 
         #DEBUG
         #print("----")
