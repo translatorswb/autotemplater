@@ -164,17 +164,13 @@ def segment_turns(turns, max_chars=MAX_CHARS_PER_SUBSEG, translator_func=None, d
     for turn in turns:
         turnstart = turn['start']
         if debug: print(">>>", turnstart)
-        if debug: print(turn)
         if debug: print(turn['puncdtext'])
-
-        turntext = turn['puncdtext'] if turn['puncdtext'] else turn['rawtext']
-
-        sentends = get_sentend_pos(turntext)
+        sentends = get_sentend_pos(turn['puncdtext'])
         if debug: print(sentends)
         prevsentendindex = 0
         for sentendindex in sentends:
             if debug: print("from", prevsentendindex, "to", sentendindex)
-            turntext = ' '.join(turntext.split()[prevsentendindex:sentendindex+1])
+            puncdtext = ' '.join(turn['puncdtext'].split()[prevsentendindex:sentendindex+1])
             rawtext = ' '.join(turn['rawtext'].split()[prevsentendindex:sentendindex+1])
             
             sentstart = turnstart + turn['wordtiming'][prevsentendindex]['Offset']/10000000
@@ -189,7 +185,7 @@ def segment_turns(turns, max_chars=MAX_CHARS_PER_SUBSEG, translator_func=None, d
                  'speaker': turn['speaker'], 
                  'toolong':None, 
                  'rawtext': rawtext, 
-                 'puncdtext': turntext,
+                 'puncdtext': puncdtext,
                  'wordtiming': wordtiming } 
             
             if debug: print(sentturn['start'], sentturn['end'])
@@ -203,8 +199,8 @@ def segment_turns(turns, max_chars=MAX_CHARS_PER_SUBSEG, translator_func=None, d
 
                 sentturns_translated.extend(split_long_turn(sentturn, 'translated', max_chars, debug))
                 
-            sentturns.extend(split_long_turn(sentturn, 'puncdtext', max_chars, debug))
+            sentturns.extend(split_long_turn(sentturn, 'puncdtext', max_chars))
                 
             prevsentendindex = sentendindex+1
-            if debug: print()
+            print()
     return sentturns, sentturns_translated
