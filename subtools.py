@@ -31,10 +31,6 @@ def get_azure_translator(src, trg, subscription_key, endpoint = "https://api.cog
         'X-ClientTraceId': str(uuid.uuid4())
     }
 
-    body = [{
-        'text': string
-    }]
-
     # request = requests.post(constructed_url, params=params, headers=headers, json=body)
     # response = request.json()
 
